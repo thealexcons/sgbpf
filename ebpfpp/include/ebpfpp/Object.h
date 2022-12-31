@@ -8,8 +8,8 @@
 #include "Map.h"
 #include "Program.h"
 
-#include <bpf/bpf.h>
-#include <bpf/libbpf.h>
+#include "bpf/bpf.h"
+#include "bpf/libbpf.h"
 
 namespace ebpf {
 
@@ -39,9 +39,7 @@ public:
 
     std::optional<Map> findMapByName(const std::string& name) const;
 
-    std::optional<Program> findProgramBySectionTitle(const std::string& title) const;
-
-    std::optional<Program> findProgramByFunctionName(const std::string& funcName) const;
+    std::optional<Program> findProgramByName(const std::string& funcName) const;
 
 private:
     // DATA

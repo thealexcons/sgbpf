@@ -3,8 +3,8 @@
 
 #include <string>
 
-#include <bpf/bpf.h>
-#include <bpf/libbpf.h>
+#include "bpf/bpf.h"
+#include "bpf/libbpf.h"
 
 namespace ebpf {
 

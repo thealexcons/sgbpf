@@ -18,5 +18,5 @@ See appendix 1 in report, but in summary:
 
 3. Build libbpf and install the headers locally:
     ```$ make --directory = libbpf/src all```
-    ```$ DESTDIR = root make --directory = libbpf/src install_headers```
+    ```$ DESTDIR=root make --directory = libbpf/src install_headers```
 

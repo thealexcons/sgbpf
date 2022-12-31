@@ -5,8 +5,9 @@
 
 #include <sstream>
 
-#include <bpf/bpf.h>
-#include <bpf/libbpf.h>
+#include "bpf/bpf.h"
+#include "bpf/libbpf.h"
+#include <linux/bpf.h>
 
 namespace ebpf {
 

@@ -64,21 +64,14 @@ std::vector<Program> Object::programs() const {
 
 std::optional<Map> Object::findMapByName(const std::string& name) const {
     if (auto mapPtr = bpf_object__find_map_by_name(d_object, name.c_str())) {
-        return Map{mapPtr};
+        return Map(mapPtr);
     }
     return {};
 }
 
-std::optional<Program> Object::findProgramBySectionTitle(const std::string& title) const {
-    if (auto progPtr = bpf_object__find_program_by_title(d_object, title.c_str())) {
-        return Program{progPtr};
-    }
-    return {};
-}
-
-std::optional<Program> Object::findProgramByFunctionName(const std::string& funcName) const {
+std::optional<Program> Object::findProgramByName(const std::string& funcName) const {
     if (auto progPtr = bpf_object__find_program_by_name(d_object, funcName.c_str())) {
-        return Program{progPtr};
+        return Program(progPtr);
     }
     return {};
 }

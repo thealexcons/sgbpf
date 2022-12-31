@@ -5,10 +5,10 @@
 #include <chrono>
 #include <sstream>
 
-#include "../../ebpfpp/include/ebpfpp/Program.h"
-#include "../../ebpfpp/include/ebpfpp/Map.h"
-#include "../../ebpfpp/include/ebpfpp/Object.h"
-#include "../../ebpfpp/include/ebpfpp/Util.h"
+#include "ebpfpp/Program.h"
+#include "ebpfpp/Map.h"
+#include "ebpfpp/Object.h"
+#include "ebpfpp/Util.h"
 
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>

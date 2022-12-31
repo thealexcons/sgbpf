@@ -38,6 +38,7 @@ int main(int argc, char** argv) {
     ebpf::Object obj{argv[1]};
 
     auto prog = obj.findProgramByName("rx_filter_prog").value();
+    bpf_program__set_type(prog.get(), BPF_PROG_TYPE_XDP);   // TODO create method for this
     std::cout << "Loaded XDP prog with fd " << prog.fd() << " and name " << prog.name() << '\n';
 
     auto maps = obj.maps();

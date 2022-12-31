@@ -7,7 +7,7 @@ LIBEBPFPP_HEADERS := ../../ebpfpp/include/
 LIBEBPFPP_LIB_DIR := ../../ebpfpp/lib/
 
 LOADER := loader
-BPF_PROG := xdp_filter_prog.bpf.o
+BPF_PROG := xdp_filter_port.bpf.o
 
 all: $(LOADER) $(BPF_PROG)
 
@@ -27,8 +27,8 @@ $(LOADER): loader.cpp
 	g++ -std=c++17 -I$(LIBEBPFPP_HEADERS) -I$(LIBBPF_HEADERS) -L$(LIBEBPFPP_LIB_DIR) -L$(LIBBPF_LIB_DIR) -g -Wall $^ -o $@ -lbpf -lebpfpp
 
 
-$(BPF_PROG): xdp_filter_prog.bpf.c
-	clang -target bpf -D __BPF_TRACING__ -I$(LIBBPF_HEADERS) -Wall -Werror -O2 -c $^ -o $@
+$(BPF_PROG): xdp_filter_port.bpf.c
+	clang -target bpf -D __BPF_TRACING__ -I$(LIBBPF_HEADERS) -g -Wall -Werror -O2 -c $^ -o $@
 
 
 clean:

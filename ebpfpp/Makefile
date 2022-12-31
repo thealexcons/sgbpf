@@ -4,7 +4,9 @@ CC := g++
 OUTPUTFILE := libebpfpp.a
 
 INC_DIR := ./include/ebpfpp
-CFLAGS= -std=c++17 -O2 -g -Wall -I$(INC_DIR) -I../libbpf/src/root/usr/include/ -L../libbpf/src/
+LIBBPF_INC := ../libbpf/src/root/usr/include/
+LIBBPF_SRC := ../libbpf/src/
+CFLAGS= -std=c++17 -O2 -g -Wall -I$(INC_DIR) -I$(LIBBPF_INC) -L$(LIBBPF_SRC)
 
 
 SRC_DIR := ./src
@@ -21,7 +23,7 @@ $(OUTPUTFILE): $(SOURCES)
 	mkdir -p $(OUT_DIR) $(OBJ_DIR)
 	for file in $(SOURCES); do $(CC) $(CFLAGS) -c $$file -O -lbpf; done
 	mv *.o $(OBJ_DIR)
-	ar rcs -o $(OUT_DIR)/$@ $(wildcard $(OBJ_DIR)/*.o)
+	ar rcs $(OUT_DIR)/$@ $(wildcard $(OBJ_DIR)/*.o)
 
 
 .PHONY: clean 

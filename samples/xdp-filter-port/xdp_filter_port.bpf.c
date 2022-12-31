@@ -23,35 +23,42 @@ enum reduce_operation_t {
     // REDUCE_OPERATION_FILTER // TODO future, allow composable operations
 };
 
-struct bpf_map_def SEC("maps") map_local_ports = {
-    .type           = BPF_MAP_TYPE_HASH,
-    .key_size       = sizeof(__u16),            // Local port number (in htons)
-    .value_size     = sizeof(__u8),             // Is present?
-    .max_entries    = MAX_SOCKETS_ALLOWED
-};
+// struct bpf_map_def SEC("maps") map_local_ports = {
+//     .type           = BPF_MAP_TYPE_HASH,
+//     .key_size       = sizeof(__u16),            // Local port number (in htons)
+//     .value_size     = sizeof(__u8),             // Is present?
+//     .max_entries    = MAX_SOCKETS_ALLOWED
+// };
 
-struct bpf_map_def SEC("maps") map_gather_results = {
-    .type           = BPF_MAP_TYPE_HASH,
-    .key_size       = sizeof(__u16),            // Local port number (in htons)
-    .value_size     = sizeof(struct result),    // Result          
-    .max_entries    = MAX_SOCKETS_ALLOWED
-};
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __type(key, __u16);
+    __type(value, __u8);
+    __uint(max_entries, MAX_SOCKETS_ALLOWED);
+} map_local_ports SEC(".maps");
+
+// struct bpf_map_def SEC("maps") map_gather_results = {
+//     .type           = BPF_MAP_TYPE_HASH,
+//     .key_size       = sizeof(__u16),            // Local port number (in htons)
+//     .value_size     = sizeof(struct result),    // Result          
+//     .max_entries    = MAX_SOCKETS_ALLOWED
+// };
 
 // Stores the ordered list of reduction operations
-struct bpf_map_def SEC("maps") map_reduce_operation = {
-    .type           = BPF_MAP_TYPE_ARRAY,
-    .key_size       = sizeof(__u32),      
-    .value_size     = sizeof(enum reduce_operation_t),          
-    .max_entries    = 1
-};
+// struct bpf_map_def SEC("maps") map_reduce_operation = {
+//     .type           = BPF_MAP_TYPE_ARRAY,
+//     .key_size       = sizeof(__u32),      
+//     .value_size     = sizeof(enum reduce_operation_t),          
+//     .max_entries    = 1
+// };
 
 // Stores the current total aggregate value from all previous reductions
-struct bpf_map_def SEC("maps") map_current_reduced_value = {
-    .type           = BPF_MAP_TYPE_ARRAY,
-    .key_size       = sizeof(__u32),
-    .value_size     = sizeof(void*),    // TODO Maybe this should just be bytes
-    .max_entries    = 1
-};
+// struct bpf_map_def SEC("maps") map_current_reduced_value = {
+//     .type           = BPF_MAP_TYPE_ARRAY,
+//     .key_size       = sizeof(__u32),
+//     .value_size     = sizeof(void*),    // TODO Maybe this should just be bytes
+//     .max_entries    = 1
+// };
 
 
 // Program map for tail calls
@@ -63,18 +70,18 @@ enum {
     XDP_PROG_COUNT
 };
 
-struct bpf_map_def SEC("maps") map_xdp_progs = {
-	.type           = BPF_MAP_TYPE_PROG_ARRAY,
-	.key_size       = sizeof(__u32),
-	.value_size     = sizeof(__u32),
-	.max_entries    = XDP_PROG_COUNT,
-};
+// struct bpf_map_def SEC("maps") map_xdp_progs = {
+// 	.type           = BPF_MAP_TYPE_PROG_ARRAY,
+// 	.key_size       = sizeof(__u32),
+// 	.value_size     = sizeof(__u32),
+// 	.max_entries    = XDP_PROG_COUNT
+// };
 
 // Checks if PTR + OFFSET > END
 #define CHECK_OUT_OF_BOUNDS(PTR, OFFSET, END) (((void*) PTR) + OFFSET > ((void*) END))
 
-SEC("xdp/rx_filter")
-int rx_filter_func(struct xdp_md* ctx) {
+SEC("xdp")
+int rx_filter_prog(struct xdp_md* ctx) {
     void* data_end = (void*) (long) ctx->data_end;
     void* data = (void*) (long) ctx->data;
 

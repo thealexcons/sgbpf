@@ -35,6 +35,7 @@ int main(int argc, char** argv) {
     bpf_object__load(obj);
 
     auto prog = bpf_object__find_program_by_name(obj, argv[2]);
+    bpf_program__set_type(prog, BPF_PROG_TYPE_XDP);
     auto progFd = bpf_program__fd(prog);
     auto progName = bpf_program__name(prog);
     std::cout << "Loaded XDP prog with fd " << progFd << " and name " << progName << '\n';

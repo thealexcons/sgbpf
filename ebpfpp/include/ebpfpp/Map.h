@@ -31,13 +31,6 @@ public:
     const std::string& name() const { return d_name; }
 
     // METHODS
-    /*
-        IMPORTANT NOTE: in bpf.h:252, i had to comment out the forward declaration
-        of the enum. This is needed to compile with C++ and to use the functions such
-        as bpf_map_lookup_elem(). Future work: fork libbpf and make the changes there,
-        then build against the submodule instead of the installed package
-    */
-
     template <typename KEY, typename VALUE>
     VALUE* find(const KEY* key, VALUE* value) {
         if (bpf_map_lookup_elem(d_fd, key, value))

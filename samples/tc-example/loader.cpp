@@ -26,7 +26,7 @@ static int ifindex = -1;
 
 int main(int argc, char** argv) {
     if (argc < 3) {
-        std::cerr << "ERROR - Usage is: " << argv[0] << "<BPF_FILE> <PROG_NAME> <INTERFACE>" << "\n";
+        std::cerr << "ERROR - Usage is: " << argv[0] << " <BPF_FILE> <PROG_NAME> <INTERFACE>" << "\n";
         return 1;
     }
     
@@ -39,7 +39,7 @@ int main(int argc, char** argv) {
     
     ebpf::Object obj{argv[1]};
 
-    auto prog = obj.findProgramByName("tc_ingress_filter_prog").value();
+    auto prog = obj.findProgramByName(argv[2]).value();
     std::cout << "Loaded TC prog with fd " << prog.fd() << " and name " << prog.name() << '\n';
 
     std::cout << "Prog type: " << bpf_program__type(prog.get()) << "\n";
@@ -53,7 +53,7 @@ int main(int argc, char** argv) {
     // TC API: https://github.com/libbpf/libbpf/commit/d71ff87a2dd7b92787719aab233767e9c74fbd48
     // SEE EXAMPLE AT THE BOTTOM
     bpf_tc_hook tcHook;
-    memset(&tcHook, 0, sizeof(bpf_tc_hook));
+    memset(&tcHook, 0, sizeof(bpf_tc_hook));    // also needed
     tcHook.attach_point = BPF_TC_INGRESS;
     tcHook.ifindex = ifindex;
     tcHook.sz = sizeof(bpf_tc_hook);    // this is needed for some reason, otherwise it fails

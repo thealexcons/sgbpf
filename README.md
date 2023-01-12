@@ -19,6 +19,7 @@ See appendix 1 in report, but in summary:
 3. Build libbpf and install the headers locally:
     ```$ make --directory = libbpf/src all```
     ```$ DESTDIR=root make --directory = libbpf/src install_headers```
+    ```$ make --directory = libbpf/src install_uapi_headers```
 
 Note: When running the loader program, if you get a message about a missing shared library, you can copy
 the missed shared object to `lib/x86_64-linux-gnu` or updated the `LD_LIBRARY_PATH` path ([example](https://stackoverflow.com/questions/70696552/cannot-open-shared-object-file-no-such-file-or-directory-including-libbpf-wit)).

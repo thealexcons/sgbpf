@@ -93,6 +93,7 @@ int rx_filter_prog(struct xdp_md* ctx) {
         return XDP_DROP;
 
     void* payload;
+    int payload_len = 0;
     __u16 local_port;
 
     if (ip->protocol == IPPROTO_UDP) {
@@ -101,6 +102,7 @@ int rx_filter_prog(struct xdp_md* ctx) {
             return XDP_DROP;
 
         local_port = udp->dest;
+        payload_len = ntohs(ip->tot_len) - (ip->ihl + sizeof(struct udphdr));
         payload = ((void*) udp) + sizeof(struct udphdr);
     }
     else if (ip->protocol == IPPROTO_TCP) {
@@ -109,6 +111,7 @@ int rx_filter_prog(struct xdp_md* ctx) {
             return XDP_DROP;
 
         local_port = tcp->dest;
+        payload_len = ntohs(ip->tot_len) - (ip->ihl + tcp->doff) * 4;
         payload = ((void*) tcp) + sizeof(struct tcphdr);   
     }
     else {
@@ -121,6 +124,8 @@ int rx_filter_prog(struct xdp_md* ctx) {
         return XDP_PASS;
 
     // REMEMBER that the map stores the port in htons, no need to convert
+
+    // DO something with application layer data (payload and payload_len)
 
     // TODO Store the payload in a parsing context object
     // bpf_tail_call(ctx, &map_xdp_progs, PROG_XDP_RX_READ_PAYLOAD);

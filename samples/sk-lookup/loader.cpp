@@ -43,9 +43,7 @@ int main(int argc, char** argv) {
     auto prog = obj.findProgramByName(argv[2]).value();
     std::cout << "Loaded SK prog with fd " << prog.fd() << " and name " << prog.name() << '\n';
 
-    // TODO: attach program to network namespace
     // SEE http://tomoyo.osdn.jp/cgi-bin/lxr/source/tools/testing/selftests/bpf/prog_tests/sk_lookup.c?a=mips#L470
-    // auto progLink = bpf_program__attach(prog.get());
     int netFd = open("/proc/self/ns/net", O_RDONLY);
     if (netFd < 0) {
         std::cerr << "Could not open network namespace\n";

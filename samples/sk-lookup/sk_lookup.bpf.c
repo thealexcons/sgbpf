@@ -29,7 +29,7 @@ int dispatch_prog(struct bpf_sk_lookup* ctx) {
     __u16 port = ctx->local_port;   // NOTE: this is in host byte order
     __u8* open = bpf_map_lookup_elem(&map_ports, &port);
     if (!open)
-        return SK_DROP;
+        return SK_PASS;
 
     struct bpf_sock* sk = bpf_map_lookup_elem(&map_socket, &zero);
     if (!sk)

@@ -61,6 +61,8 @@ static void modify_packet_udp(struct __sk_buff* skb, struct iphdr* iph, struct u
     (void) iph;
     (void) udph;
 
+    // worker_port is in host byte order, just like old_port below
+
     __u16 old_port = load_half(skb, UDP_DEST_OFF); // this seems to be in host byte order
     // but udph->dest is in network byte order??
 

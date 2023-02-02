@@ -23,10 +23,11 @@ if __name__ == '__main__':
 
     # Create a socket object
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.bind(("", port))
+    s.bind(("127.0.0.1", port))
 
     while True:
         data, addr = s.recvfrom(1024)
+        print("GOT REQUEST")
         if data.decode() == "WORK":
             result = perform_task()
             print("Produced value", result)

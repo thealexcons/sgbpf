@@ -195,6 +195,8 @@ int main(int argc, char** argv) {
 
     std::cout << "Sent, waiting to receive" << std::endl;
 
+    // Use: nc -u -l -p 5556 to open a worker process listening for udp packets
+
 
     // if (recvfrom(skfd, buf, 256, 0, (struct sockaddr *)&client, &slen) == -1) {
     //     perror("recvfrom");

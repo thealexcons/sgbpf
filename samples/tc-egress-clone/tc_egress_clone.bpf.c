@@ -98,6 +98,9 @@ static void clone_send_packet(struct __sk_buff* skb,
     // 2. Clone and redirect the packet to the worker
     bpf_clone_redirect(skb, skb->ifindex, 0);
 
+    // Cloning within the kernel means we avoid multiple user-kernel interactions
+    // and multiple traversals through the TCP/IP stack. See Electrode paper (consensus)
+
     // Example of modifying the payload
     // char c = '_';
     // int off = sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr);

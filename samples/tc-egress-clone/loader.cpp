@@ -74,7 +74,7 @@ std::vector<Destination> readWorkerDestinations(const std::string& fileName) {
 
 
 void scatterMessage(int skfd, const sockaddr_in* servAddr, const std::string& msg) {
-    if (sendto(skfd, msg.c_str(), msg.size(), 0, (const sockaddr *)&servAddr, sizeof(servAddr)) < 0)
+    if (sendto(skfd, msg.c_str(), msg.size(), 0, (const sockaddr *)&servAddr, sizeof(sockaddr_in)) < 0)
     { 
         std::cerr << "Failed: sendto()\n";
         return;
@@ -204,8 +204,8 @@ int main(int argc, char** argv) {
     //     exit(EXIT_FAILURE);
     // }
     
-
     // printf("Received packet from %s:%d\nData: %s\n\n", inet_ntoa(client.sin_addr), ntohs(client.sin_port), buf);
+    
     // sockaddr_in clientAddr;
     // memset(&clientAddr, 0, sizeof(clientAddr));
     // socklen_t len = sizeof(clientAddr);

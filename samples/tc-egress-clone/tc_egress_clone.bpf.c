@@ -58,39 +58,23 @@ unsigned long long load_word(void *skb,
 			     unsigned long long off) asm("llvm.bpf.load.word");
 
 static void modify_packet_udp(struct __sk_buff* skb, struct iphdr* iph, struct udphdr* udph, __u32 worker_ip, __u16 worker_port) {
-    (void) iph;
-    (void) udph;
 
-    // worker_port is in host byte order, just like old_port below
+    // __u16 old_port = udph->dest;
+    // __u32 old_ip_addr = iph->daddr;
 
-    __u16 old_port = load_half(skb, UDP_DEST_OFF); // this seems to be in host byte order
-    // but udph->dest is in network byte order??
-
-    // SAME as bpf_htons(udph->dest);
-    // bpf_printk("udph->dest : %d", udph->dest);
-    // bpf_printk("bpf_htons(udph->dest) : %d", bpf_htons(udph->dest));
-    // bpf_printk("old_port = %d", old_port);
-    // bpf_printk("worker port = %d", worker_port);
-
-    __u32 old_ip_addr = bpf_htonl(load_word(skb, IP_DEST_OFF));    // SAME as iph->daddr
-    // bpf_printk("iph->daddr : %d", iph->daddr);
-    // bpf_printk("old_ip_addr = %d", old_ip_addr);
-    // bpf_printk("worker ip = %d", worker_ip);
+    // BPF_F_RECOMPUTE_CSUM means there is no need to replace the checksum manually
 
     // Modify header with the new destination IP address
-    bpf_l4_csum_replace(skb, UDP_CSUM_OFF, old_ip_addr, worker_ip, IS_PSEUDO | sizeof(worker_ip));
-    bpf_l3_csum_replace(skb, IP_CSUM_OFF, old_ip_addr, worker_ip, sizeof(worker_ip));
+    // bpf_l4_csum_replace(skb, UDP_CSUM_OFF, old_ip_addr, worker_ip, IS_PSEUDO | sizeof(worker_ip));
+    // bpf_l3_csum_replace(skb, IP_CSUM_OFF, old_ip_addr, worker_ip, sizeof(worker_ip));
     bpf_skb_store_bytes(skb, IP_DEST_OFF, &worker_ip, sizeof(worker_ip), BPF_F_RECOMPUTE_CSUM);
 
     // Modify header the new destination port
-    bpf_l4_csum_replace(skb, UDP_CSUM_OFF, old_port, worker_port, sizeof(worker_port));
+    // bpf_l4_csum_replace(skb, UDP_CSUM_OFF, old_port, worker_port, sizeof(worker_port));
     bpf_skb_store_bytes(skb, UDP_DEST_OFF, &worker_port, sizeof(worker_port), BPF_F_RECOMPUTE_CSUM);
 
-    // 3. Once we get to the scatter, we should probably set the udph->source to
+    // TODO Once we get to the scatter, we should probably set the udph->source to
     // port of the worker UDP sockets to correctly reply to the coordinator
-    
-    bpf_clone_redirect(skb, skb->ifindex, 0);
-
 }
 
 
@@ -109,10 +93,15 @@ static void clone_send_packet(struct __sk_buff* skb,
     bpf_printk("Sending packet to %s:%d", str, bpf_ntohs(worker_port));
 
     // 1. Update the packet header for the new destination
-    modify_packet_udp(skb, iph, udph, worker_ip, bpf_ntohs(worker_port));    
+    modify_packet_udp(skb, iph, udph, worker_ip, worker_port);  
 
-    // 2. Clone the skb
+    // 2. Clone and redirect the packet to the worker
+    bpf_clone_redirect(skb, skb->ifindex, 0);
 
+    // Example of modifying the payload
+    // char c = '_';
+    // int off = sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr);
+    // bpf_skb_store_bytes(skb, off, &c, sizeof(c), BPF_F_RECOMPUTE_CSUM);  
 }
 
 
@@ -160,18 +149,8 @@ int tc_egress_clone_prog(struct __sk_buff* skb) {
 	if ((void *)(iph + 1) > data_end)
 		return TC_ACT_OK;
 
-
-    // Intercept any outgoing scatter messages from the application
-    // TODO Maybe there's a better way to intercept traffic from a particular socket
-    uint16_t* local_application_port; // in network byte order already
-    const uint32_t zero = 0;
-    local_application_port = bpf_map_lookup_elem(&map_application_port, &zero);
-    if (!local_application_port)
-        return TC_ACT_OK;
-
     if (iph->protocol != IPPROTO_UDP)
         return TC_ACT_OK;
-
 
     udph = (struct udphdr*)(iph + 1);
     if ((void *)(udph + 1) > data_end)
@@ -179,7 +158,18 @@ int tc_egress_clone_prog(struct __sk_buff* skb) {
 
     // view logs: sudo cat /sys/kernel/debug/tracing/trace_pipe
     // sometimes they take long to appear
-    
+
+
+    // Intercept any outgoing scatter messages from the application
+    // TODO Maybe there's a better way to intercept traffic from a particular socket
+    // look into BPF_MAP_TYPE_SK_STORAGE
+    // see example code Marios sent in email (email subject: Modifying SKB header fields to clone packet)
+    uint16_t* local_application_port; // in network byte order already
+    const uint32_t zero = 0;
+    local_application_port = bpf_map_lookup_elem(&map_application_port, &zero);
+    if (!local_application_port)
+        return TC_ACT_OK;
+
     // the scatter request is sent to "self", so have this check here
     if (udph->dest == udph->source && udph->source == *local_application_port) {
         
@@ -199,7 +189,6 @@ int tc_egress_clone_prog(struct __sk_buff* skb) {
     
 
         bpf_printk("Got SCATTER request");
-        bpf_printk("App port = %d", *local_application_port);
 
         // Clone the outgoing packet to all the registered workers
         struct send_worker_ctx data = {
@@ -211,16 +200,11 @@ int tc_egress_clone_prog(struct __sk_buff* skb) {
 
         bpf_printk("Finished SCATTER request");
         
-        return TC_ACT_OK;
+        return TC_ACT_SHOT; // To avoid double-sending to the last worker
     }
     
-
-    // look at consensus paper on how to do this
-
     return TC_ACT_OK;
 }
-
-
 
 
 char LICENSE[] SEC("license") = "GPL";

@@ -168,9 +168,6 @@ int main(int argc, char** argv) {
     servAddr.sin_port = htons(PORT);
     servAddr.sin_addr.s_addr = htonl(INADDR_ANY); //inet_addr("127.0.0.1");
 
-    // For the scatter message, there is no need to bind, since we are just sending
-    // a message. We could alternatively reuse the sending socket as the control socket
-    // on the receiving side. In that case, we do need to bind the socket.
     if ( bind(skfd, (const struct sockaddr *) &servAddr, sizeof(servAddr)) < 0 ) {
         std::cerr << "Could not bind socket\n";
         return 1;  

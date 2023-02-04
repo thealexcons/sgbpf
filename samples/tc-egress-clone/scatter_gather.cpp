@@ -4,13 +4,26 @@
 #include <fstream>
 #include <sstream>
 #include <cstring>
+#include <cassert>
+#include <csignal>
 
 #include <arpa/inet.h>
 #include <net/if.h>
 #include <unistd.h>
 
 
+#include "ebpfpp/Program.h"
+#include "ebpfpp/Map.h"
+#include "ebpfpp/Object.h"
+#include "ebpfpp/Util.h"
 
+#include <bpf/bpf.h>
+#include <bpf/libbpf.h>
+
+
+////////////////////////////
+////////   Worker   //////// 
+////////////////////////////
 
 class Worker 
 {
@@ -27,8 +40,8 @@ public:
 
     // GETTERS
     const uint32_t ipAddressNet() const { return d_ipAddressNet; }
-    const uint16_t portNet() { return d_portNet; }
-    const std::string& ipAddress() const { return d_ipAddress; }
+    const uint16_t portNet() const { return d_portNet; }
+    std::string ipAddress() const { return d_ipAddress; }
     uint16_t port() const { return d_port; }
 
     // STATIC METHODS
@@ -39,7 +52,7 @@ Worker::Worker(std::string ipAddress, uint16_t port)
     : d_ipAddress{std::move(ipAddress)}
     , d_port{port}
 {
-    if (!inet_pton(AF_INET, d_ipAddress.c_str(), &d_ipAddress))
+    if (!inet_pton(AF_INET, d_ipAddress.c_str(), &d_ipAddressNet))
         throw std::runtime_error{"Invalid IPv4 address"};
     
     d_portNet = htons(d_port);
@@ -58,13 +71,13 @@ std::vector<Worker> Worker::fromFile(const std::string& filePath)
             if (!ptr)
                 throw std::runtime_error{"Invalid workers config file"};
                 
-            auto ipStr = ptr;
+            std::string ipStr{ptr, strlen(ptr)};
 
             ptr = strtok(NULL, ":");
             if (!ptr)
                 throw std::runtime_error{"Invalid workers config file"};
             
-            auto port = static_cast<uint16_t>(std::stoi(ptr));
+            auto port = static_cast<uint16_t>(std::stoi(std::string{ptr, strlen(ptr)}));
 
             dests.emplace_back(ipStr, port);
         }
@@ -75,7 +88,137 @@ std::vector<Worker> Worker::fromFile(const std::string& filePath)
 }
 
 
-////////////////////////////////////////////////////////////////////
+
+////////////////////////////
+/////  ScatterProgram  ///// 
+////////////////////////////
+
+struct ScatterProgram 
+{
+    bpf_tc_hook d_tcHook;
+    bpf_tc_opts d_tcOpts;
+
+    constexpr static const auto SCATTER_PROG_NAME = "scatter_prog";
+
+    ScatterProgram() = default;
+    ScatterProgram(const ebpf::Object& obj, int ifindex);
+
+    ~ScatterProgram();
+};
+
+ScatterProgram::ScatterProgram(const ebpf::Object& obj, int ifindex) 
+{
+    auto prog = obj.findProgramByName(SCATTER_PROG_NAME);
+    if (!prog)
+		throw std::runtime_error{"Failed to find scatter program"};
+
+    /*
+    std::cout << "Loaded TC prog with fd " << prog.value().fd() << " and name " << prog.value().name() << '\n';
+    std::cout << "Prog type: " << bpf_program__type(prog.value().get()) << "\n";
+
+    auto maps = obj.maps();
+    for (const auto& m : maps) {
+        std::cout << "Map " << m.name() << ", ";
+    }
+    std::cout << '\n';
+    */
+   
+    memset(&d_tcHook, 0, sizeof(bpf_tc_hook));
+    d_tcHook.attach_point = BPF_TC_EGRESS;
+    d_tcHook.ifindex = ifindex;
+    d_tcHook.sz = sizeof(bpf_tc_hook);
+
+    auto err = bpf_tc_hook_create(&d_tcHook);
+	if (err && err != -EEXIST)
+		throw std::runtime_error{"Failed to create TC hook"};
+
+    memset(&d_tcOpts, 0, sizeof(bpf_tc_opts));
+    d_tcOpts.prog_fd = prog.value().fd();
+    d_tcOpts.sz = sizeof(bpf_tc_opts);
+
+    if (bpf_tc_attach(&d_tcHook, &d_tcOpts) < 0)
+		throw std::runtime_error{"Failed to attach program to TC egress hook"};
+
+    std::cout << "Attached TC scatter program" << std::endl;
+}
+
+ScatterProgram::~ScatterProgram()
+{
+    bpf_tc_detach(&d_tcHook, &d_tcOpts);
+    bpf_tc_hook_destroy(&d_tcHook);
+
+    std::cout << "Dettached TC scatter program" << std::endl;
+}
+
+
+//////////////////////////////
+///  ScatterGatherContext  /// 
+//////////////////////////////
+
+class ScatterGatherContext
+{
+private:
+    // DATA
+    ebpf::Object            d_object;
+    int                     d_ifindex;
+    ScatterProgram          d_scatterProg;
+    std::vector<Worker>     d_workers;    
+
+    // Map names
+    constexpr static const auto WORKER_IPS_MAP_NAME = "map_worker_ips";
+    constexpr static const auto WORKER_PORTS_MAP_NAME = "map_worker_ports";
+    constexpr static const auto APP_PORT_MAP_NAME = "map_application_port";
+
+public:
+    // TODO eventually read from file
+    ScatterGatherContext(const char* objFile, const char* ifname);
+
+    void setScatterPort(uint16_t port);
+
+    void setWorkers(const std::vector<Worker>& workers);
+
+    const std::vector<Worker>& workers() const { return d_workers; }
+};
+
+
+ScatterGatherContext::ScatterGatherContext(const char* objFile, const char* ifname)
+    : d_object{objFile}
+    , d_ifindex{::if_nametoindex(ifname)}
+    , d_scatterProg{d_object, d_ifindex}
+{
+    if (!d_ifindex)
+        throw std::invalid_argument{"Cannot resolve interface index"};
+}
+
+void ScatterGatherContext::setScatterPort(uint16_t port)
+{
+    // Register the application's outgoing port
+    auto applicationPortMap = d_object.findMapByName(APP_PORT_MAP_NAME).value();
+    const uint32_t idx = 0;
+    const auto portNetBytes = htons(port);
+    applicationPortMap.update(&idx, &portNetBytes);
+}
+
+void ScatterGatherContext::setWorkers(const std::vector<Worker>& workers)
+{
+    d_workers = workers;
+
+    auto workerIpMap = d_object.findMapByName(WORKER_IPS_MAP_NAME).value();
+    auto workerPortMap = d_object.findMapByName(WORKER_PORTS_MAP_NAME).value();
+    for (auto i = 0u; i < workers.size(); ++i) {
+        auto ip = workers[i].ipAddressNet();
+        auto port = workers[i].portNet();
+        workerIpMap.update(&i, &ip);
+        workerPortMap.update(&i, &port);
+    }
+}
+
+
+
+/////////////////////////////
+/////  ScatterGatherUDP  //// 
+/////////////////////////////
+
 
 enum class GatherCompletionPolicy 
 {
@@ -92,17 +235,17 @@ class ScatterGatherUDP
 {
 private:
     // DATA MEMBERS
-    int                 d_scatterSkFd;  // Scatter socket
-    sockaddr_in         d_scatterSkAddr;
-    int                 d_ctrlSkFd;     // Gather control socket
-    std::vector<int>    d_workerSkFds;  // Gather worker sockets
-    std::vector<Worker> d_workers;
+    int                     d_scatterSkFd;  // Scatter socket
+    sockaddr_in             d_scatterSkAddr;
+    int                     d_ctrlSkFd;     // Gather control socket
+    std::vector<int>        d_workerSkFds;  // Gather worker sockets
+    ScatterGatherContext    d_ctx;
 
-    const uint16_t      PORT = 9223;    // just generate and add to map
+    const uint16_t PORT = 9223;    // just generate and add to map
 
 public:
 
-    explicit ScatterGatherUDP(const std::vector<Worker>& workers);
+    explicit ScatterGatherUDP(ScatterGatherContext& ctx);
 
     ~ScatterGatherUDP();
 
@@ -126,8 +269,8 @@ private:
 };
 
 
-ScatterGatherUDP::ScatterGatherUDP(const std::vector<Worker>& workers) 
-    : d_workers{workers}
+ScatterGatherUDP::ScatterGatherUDP(ScatterGatherContext& ctx) 
+    : d_ctx{ctx}
 {
     // Configure the scatter socket for sending
     d_scatterSkFd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);  
@@ -142,6 +285,8 @@ ScatterGatherUDP::ScatterGatherUDP(const std::vector<Worker>& workers)
     if (bind(d_scatterSkFd, (const struct sockaddr *) &d_scatterSkAddr, sizeof(sockaddr_in)) < 0)
         throw std::runtime_error{"Failed bind() on scatter socket"};
 
+    d_ctx.setScatterPort(PORT); // Set the application's outgoing port for the scatter socket
+
 
     // Configure the gather-control socket
     d_ctrlSkFd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);  
@@ -152,7 +297,7 @@ ScatterGatherUDP::ScatterGatherUDP(const std::vector<Worker>& workers)
 
 
     // Configure the worker sockets
-    for (const auto& worker : d_workers) {
+    for (const auto& _ : d_ctx.workers()) {
         auto wfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
         if (wfd < 0)
             throw std::runtime_error{"Failed socket() on a worker socket"};
@@ -177,6 +322,7 @@ ScatterGatherUDP::~ScatterGatherUDP()
 bool ScatterGatherUDP::scatter(const char* msg, size_t len)
 {
     // Send the dummy scatter message to itself
+    std::cout << "Calling sendto()\n";
     return sendto(d_scatterSkFd, msg, len, 0, (const struct sockaddr *)&d_scatterSkAddr, sizeof(sockaddr_in)) != -1;
 }
 
@@ -208,7 +354,7 @@ void ScatterGatherUDP::gatherWaitAll(RESULT* result)
     if (bytesRead > 0 && strncmp(readyMsg, "GATHER_READY", 12)) {
 
         // Ready to read from worker sockets
-        for (auto i = 0; i < d_workerSkFds.size(); ++i) {
+        for (auto i = 0u; i < d_workerSkFds.size(); ++i) {
             char resBuf[1024];
             int n = read(d_workerSkFds[i], resBuf, 1024);
             if (n < 0)
@@ -224,14 +370,21 @@ void ScatterGatherUDP::gatherWaitAll(RESULT* result)
 
 
 
-int main() {
+int main(int argc, char** argv) {
 
     // globally initialises the library and prepares eBPF subsystem
     // ScatterGather::init("scatter_gather.json");
 
+
     auto workers = Worker::fromFile("workers.cfg");
 
-    ScatterGatherUDP scatterGather{workers};
+    ScatterGatherContext ctx{argv[1], argv[3]};
+    ctx.setWorkers(workers);
+
+    ScatterGatherUDP scatterGather{ctx};
+
+    std::cout << "Created context and operation\n";
+
 
     char buf[256];
     strncpy(buf, "SCATTER", 8); 

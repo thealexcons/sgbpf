@@ -7,9 +7,10 @@ LIBEBPFPP_HEADERS := ../../ebpfpp/include/
 LIBEBPFPP_LIB_DIR := ../../ebpfpp/lib/
 
 LOADER := loader
+SG_LOADER := sg_loader
 BPF_PROG := tc_egress_clone.bpf.o
 
-all: $(LOADER) $(BPF_PROG)
+all: $(LOADER) $(SG_LOADER) $(BPF_PROG)
 
 export DESTDIR := $(LIBBPF_HEADERS_DESTDIR)
 install:
@@ -25,6 +26,10 @@ deinstall:
 
 $(LOADER): loader.cpp
 	g++ -std=c++17 -I$(LIBEBPFPP_HEADERS) -I$(LIBBPF_HEADERS) -L$(LIBEBPFPP_LIB_DIR) -L$(LIBBPF_LIB_DIR) -g -Wall $^ -o $@ -lbpf -lebpfpp
+
+
+$(SG_LOADER): scatter_gather.cpp
+	g++ -fsanitize=address -std=c++17 -I$(LIBEBPFPP_HEADERS) -I$(LIBBPF_HEADERS) -L$(LIBEBPFPP_LIB_DIR) -L$(LIBBPF_LIB_DIR) -g -Wall $^ -o $@ -lbpf -lebpfpp
 
 
 $(BPF_PROG): tc_egress_clone.bpf.c

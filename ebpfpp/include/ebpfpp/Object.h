@@ -16,6 +16,7 @@ namespace ebpf {
 class Object {
 public:
     // CONSTRUCTORS
+    Object() = default;
     explicit Object(const std::string& path);
 
     // Object(const Object&) = delete;

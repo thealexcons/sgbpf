@@ -57,7 +57,9 @@ unsigned long long load_half(void *skb,
 unsigned long long load_word(void *skb,
 			     unsigned long long off) asm("llvm.bpf.load.word");
 
-static void modify_packet_udp(struct __sk_buff* skb, struct iphdr* iph, struct udphdr* udph, __u32 worker_ip, __u16 worker_port) {
+static void __always_inline modify_packet_udp(struct __sk_buff* skb,
+                                              __u32 worker_ip,
+                                              __u16 worker_port) {
 
     // __u16 old_port = udph->dest;
     // __u32 old_ip_addr = iph->daddr;
@@ -78,12 +80,15 @@ static void modify_packet_udp(struct __sk_buff* skb, struct iphdr* iph, struct u
 }
 
 
-static void clone_send_packet(struct __sk_buff* skb, 
-                              struct iphdr* iph, 
-                              struct udphdr* udph,
-                              uint32_t worker_ip,   // Network byte order
-                              uint16_t worker_port) // Network byte order
+static void __always_inline clone_and_send_packet(struct __sk_buff* skb, 
+                                                  struct iphdr* iph, 
+                                                  struct udphdr* udph,
+                                                  uint32_t worker_ip,   // Network byte order
+                                                  uint16_t worker_port) // Network byte order
 {
+    (void) iph;
+    (void) udph;
+
     char str[16] = "";
     __u32 ip_addr_h = bpf_ntohl(worker_ip);
 	BPF_SNPRINTF(str, sizeof(str), "%d.%d.%d.%d",
@@ -93,7 +98,7 @@ static void clone_send_packet(struct __sk_buff* skb,
     bpf_printk("Sending packet to %s:%d", str, bpf_ntohs(worker_port));
 
     // 1. Update the packet header for the new destination
-    modify_packet_udp(skb, iph, udph, worker_ip, worker_port);  
+    modify_packet_udp(skb, worker_ip, worker_port);  
 
     // 2. Clone and redirect the packet to the worker
     bpf_clone_redirect(skb, skb->ifindex, 0);
@@ -124,7 +129,7 @@ static __u64 send_worker(void* ip_map, __u32* idx, __u32* worker_ip, struct send
     if (!worker_port || *worker_port == 0)
         return 1;
 
-    clone_send_packet(data->skb, data->ip_header, data->udp_header, *worker_ip, *worker_port);
+    clone_and_send_packet(data->skb, data->ip_header, data->udp_header, *worker_ip, *worker_port);
 
     return 0;   // Continue to next worker destination (return 0)
 }
@@ -134,7 +139,7 @@ static const __u32 SCATTER_MSG_LEN = 7;
 
 
 SEC("tc")
-int tc_egress_clone_prog(struct __sk_buff* skb) {
+int scatter_prog(struct __sk_buff* skb) {
 	void* data = (void *)(long)skb->data;
 	void* data_end = (void *)(long)skb->data_end;
 	struct ethhdr* ethh;

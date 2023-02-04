@@ -101,12 +101,12 @@ struct ScatterProgram
     constexpr static const auto SCATTER_PROG_NAME = "scatter_prog";
 
     ScatterProgram() = default;
-    ScatterProgram(const ebpf::Object& obj, int ifindex);
+    ScatterProgram(const ebpf::Object& obj, uint32_t ifindex);
 
     ~ScatterProgram();
 };
 
-ScatterProgram::ScatterProgram(const ebpf::Object& obj, int ifindex) 
+ScatterProgram::ScatterProgram(const ebpf::Object& obj, uint32_t ifindex) 
 {
     auto prog = obj.findProgramByName(SCATTER_PROG_NAME);
     if (!prog)
@@ -122,7 +122,7 @@ ScatterProgram::ScatterProgram(const ebpf::Object& obj, int ifindex)
     }
     std::cout << '\n';
     */
-   
+
     memset(&d_tcHook, 0, sizeof(bpf_tc_hook));
     d_tcHook.attach_point = BPF_TC_EGRESS;
     d_tcHook.ifindex = ifindex;
@@ -160,7 +160,7 @@ class ScatterGatherContext
 private:
     // DATA
     ebpf::Object            d_object;
-    int                     d_ifindex;
+    uint32_t                d_ifindex;
     ScatterProgram          d_scatterProg;
     std::vector<Worker>     d_workers;    
 
@@ -250,6 +250,7 @@ public:
     ~ScatterGatherUDP();
 
     bool scatter(const char* msg, size_t len);
+    bool scatter(const std::string& msg);
 
     template <typename RESULT, GatherCompletionPolicy POLICY = GatherCompletionPolicy::WaitAll>
     void gather(RESULT* result,
@@ -322,10 +323,15 @@ ScatterGatherUDP::~ScatterGatherUDP()
 bool ScatterGatherUDP::scatter(const char* msg, size_t len)
 {
     // Send the dummy scatter message to itself
-    std::cout << "Calling sendto()\n";
     return sendto(d_scatterSkFd, msg, len, 0, (const struct sockaddr *)&d_scatterSkAddr, sizeof(sockaddr_in)) != -1;
 }
 
+bool ScatterGatherUDP::scatter(const std::string& msg)
+{
+    // Send the dummy scatter message to itself
+    auto len = strnlen(msg.c_str(), msg.size() + 1);
+    return sendto(d_scatterSkFd, msg.c_str(), len, 0, (const struct sockaddr *)&d_scatterSkAddr, sizeof(sockaddr_in)) != -1;
+}
 
 
 template <typename RESULT, GatherCompletionPolicy POLICY>
@@ -386,12 +392,19 @@ int main(int argc, char** argv) {
     std::cout << "Created context and operation\n";
 
 
-    char buf[256];
-    strncpy(buf, "SCATTER", 8); 
-    if (!scatterGather.scatter(buf, strlen(buf))) {
+    // char buf[256];
+    // strncpy(buf, "SCATTER", 8);     
+    // if (!scatterGather.scatter(buf, strlen(buf))) {
+    //     std::cerr << "Failed to send scatter message\n";
+    //     exit(EXIT_FAILURE);
+    // }
+
+    std::string scatterMsg = "SCATTER";
+    if (!scatterGather.scatter(scatterMsg)) {
         std::cerr << "Failed to send scatter message\n";
         exit(EXIT_FAILURE);
     }
+
 
     int res;
     scatterGather.gather(&res);

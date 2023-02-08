@@ -116,9 +116,12 @@ int rx_filter_prog(struct xdp_md* ctx) {
     }
 
     // Check if the packet is destined for one of the application's opened ports
-    __u8* is_open = bpf_map_lookup_elem(&map_local_ports, &local_port);
-    if (!is_open)
-        return XDP_PASS;
+    // __u8* is_open = bpf_map_lookup_elem(&map_local_ports, &local_port);
+    // if (!is_open)
+    //     return XDP_PASS;
+
+    if (local_port == htons(5555))
+        bpf_printk("FROM XDP: found with port %d", local_port);
 
     // REMEMBER that the map stores the port in htons, no need to convert
 

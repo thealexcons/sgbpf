@@ -2,3 +2,5 @@
 *.o
 *.s
 *.a
+**/a.out
+**/*loader

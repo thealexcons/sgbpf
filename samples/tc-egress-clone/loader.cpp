@@ -152,8 +152,6 @@ int main(int argc, char** argv) {
     }
     
 
-    std::this_thread::sleep_for(2s);
-
     // Create the server UDP sending socket    
     int skfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (skfd < 0) {

@@ -3,6 +3,11 @@
 
 #include <iostream>
 
+extern "C" {
+#include <fcntl.h>
+#include <unistd.h>
+}
+
 namespace ebpf {
 
 ////////// XDP programs //////////
@@ -56,6 +61,23 @@ void TCHook::detach(TCHook::Handle& handle) {
 
 ////////// Socket programs //////////
 
+SocketHook::Handle attach(const Program& prog) {
+    int netFd = open(SocketHook::NET_NAMESPACE, O_RDONLY);
+    if (netFd < 0) {
+        std::cerr << "Could not open network namespace for socket attaching\n";
+        exit(EXIT_FAILURE);
+    }
+    close(netFd);
+    
+    SocketHook::Handle handle;
+    handle.link = bpf_program__attach_netns(prog.get(), netFd);
+    return handle;
+}
+
+
+void SocketHook::detach(SocketHook::Handle& handle) {
+    bpf_link__destroy(handle.link);
+}
 
 
 } // close namespace ebpf

@@ -44,17 +44,17 @@ struct TCHook
 
 struct SocketHook
 {
+    constexpr static auto NET_NAMESPACE = "/proc/self/ns/net";
+
     struct Handle
     {
-
+        bpf_link* link;
     };
 
     static Handle attach(const Program& prog);
 
     static void detach(Handle& handle);
 };
-
-
 
 
 } // close namespace ebpf

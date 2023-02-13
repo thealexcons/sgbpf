@@ -8,7 +8,7 @@ LIBEBPFPP_LIB_DIR := ../../ebpfpp/lib/
 
 LOADER := loader
 SG_LOADER := sg_loader
-BPF_PROG := tc_egress_clone.bpf.o
+BPF_PROG := scatter_gather.bpf.o
 
 all: $(LOADER) $(SG_LOADER) $(BPF_PROG)
 
@@ -28,14 +28,14 @@ $(LOADER): loader.cpp
 	g++ -std=c++17 -I$(LIBEBPFPP_HEADERS) -I$(LIBBPF_HEADERS) -L$(LIBEBPFPP_LIB_DIR) -L$(LIBBPF_LIB_DIR) -g -Wall $^ -o $@ -lbpf -lebpfpp
 
 
-$(SG_LOADER): scatter_gather.cpp
+$(SG_LOADER): sg_loader.cpp
 	g++ -fsanitize=address -std=c++17 -I$(LIBEBPFPP_HEADERS) -I$(LIBBPF_HEADERS) -L$(LIBEBPFPP_LIB_DIR) -L$(LIBBPF_LIB_DIR) -g -Wall $^ -o $@ -lbpf -lebpfpp
 
 
-$(BPF_PROG): tc_egress_clone.bpf.c
+$(BPF_PROG): scatter_gather.bpf.c
 	clang -target bpf -D __BPF_TRACING__ -I$(LIBBPF_HEADERS) -g -Wall -O2 -c $^ -o $@
 
 
 clean:
 	rm -f *.o *.s
-	rm -f $(LOADER)
+	rm -f $(LOADER) $(SG_LOADER)

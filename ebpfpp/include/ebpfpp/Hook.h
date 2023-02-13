@@ -3,6 +3,8 @@
 
 #include <string>
 
+#include "Program.h"
+
 #include "bpf/bpf.h"
 #include "bpf/libbpf.h"
 

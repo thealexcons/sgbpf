@@ -10,6 +10,7 @@
 #include "ebpfpp/Map.h"
 #include "ebpfpp/Object.h"
 #include "ebpfpp/Util.h"
+#include "ebpfpp/Hook.h"
 
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
@@ -156,24 +157,27 @@ int main(int argc, char** argv) {
     }
     std::cout << '\n';
 
-    bpf_tc_hook scatterProgTCHook;
-    bpf_tc_opts scatterProgTCOpts;
-    const auto tcConfig = attach_tc_program(ifindex, scatterTCProg.fd(), BPF_TC_EGRESS);
-    std::tie(tcConfig, scatterProgTCHook, scatterProgTCOpts);
+
+    // bpf_tc_hook scatterProgTCHook;
+    // bpf_tc_opts scatterProgTCOpts;
+    // const auto tcConfig = attach_tc_program(ifindex, scatterTCProg.fd(), BPF_TC_EGRESS);
+    // std::tie(tcConfig, scatterProgTCHook, scatterProgTCOpts);
+    auto scatterProgHookHandle = ebpf::TCHook::attach(ifindex, scatterTCProg, BPF_TC_EGRESS);
     
 
     auto gatherNotifyTCProg = obj.findProgramByName("notify_gather_ctrl_prog").value();
-    bpf_tc_hook gatherNotifyProgTCHook;
-    bpf_tc_opts gatherNotifyProgTCOpts;
-    const auto tcConfig2 = attach_tc_program(ifindex, gatherNotifyTCProg.fd(), BPF_TC_INGRESS);
-    std::tie(tcConfig2, gatherNotifyProgTCHook, gatherNotifyProgTCOpts);
+    // bpf_tc_hook gatherNotifyProgTCHook;
+    // bpf_tc_opts gatherNotifyProgTCOpts;
+    // const auto tcConfig2 = attach_tc_program(ifindex, gatherNotifyTCProg.fd(), BPF_TC_INGRESS);
+    // std::tie(tcConfig2, gatherNotifyProgTCHook, gatherNotifyProgTCOpts);
+    auto gatherNotifyProgHookHandle = ebpf::TCHook::attach(ifindex, gatherNotifyTCProg, BPF_TC_INGRESS);
 
 
     // Attach the gather XDP program
     auto gatherXdpProg = obj.findProgramByName("gather_prog").value();
-    std::cout << "Loaded XDP prog with fd " << gatherXdpProg.fd() << " and name " << gatherXdpProg.name() << '\n';
     // bpf_xdp_attach_opts opts; // I think we can just pass in NULL
-    bpf_xdp_attach(ifindex, gatherXdpProg.fd(), 0, 0);
+    // bpf_xdp_attach(ifindex, gatherXdpProg.fd(), 0, 0);
+    auto gatherProgHookHandle = ebpf::XDPHook::attach(ifindex, gatherXdpProg);
     
     ////////////////////////////////////////////////////////////////////////////////////////
 
@@ -330,13 +334,17 @@ int main(int argc, char** argv) {
 
     close(skfd);
 
-    bpf_tc_detach(&scatterProgTCHook, &scatterProgTCOpts);
-    bpf_tc_hook_destroy(&scatterProgTCHook);
+    // bpf_tc_detach(&scatterProgTCHook, &scatterProgTCOpts);
+    // bpf_tc_hook_destroy(&scatterProgTCHook);
+    ebpf::TCHook::detach(scatterProgHookHandle);
 
-    bpf_tc_detach(&gatherNotifyProgTCHook, &gatherNotifyProgTCOpts);
-    bpf_tc_hook_destroy(&gatherNotifyProgTCHook);
+    // bpf_tc_detach(&gatherNotifyProgTCHook, &gatherNotifyProgTCOpts);
+    // bpf_tc_hook_destroy(&gatherNotifyProgTCHook);
+    ebpf::TCHook::detach(gatherNotifyProgHookHandle);
 
-    bpf_xdp_detach(ifindex, 0, 0);
+
+    // bpf_xdp_detach(ifindex, 0, 0);
+    ebpf::XDPHook::detach(gatherProgHookHandle);
 
     return 0;
 }

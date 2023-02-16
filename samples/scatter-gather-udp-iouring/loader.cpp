@@ -282,14 +282,18 @@ int main(int argc, char** argv) {
     // back the final value
 
     // Wait on ctrlSkFd until we receive a notification
-    char buf[256];
-    size_t b;
-    if ((b = read(ctrlSkFd, buf, 256)) > 0) {
-        std::cout << "Got notification on control socket, ready to read from worker sockets!\n";
+    sg_msg_t ctrlResp;
+    if (read(ctrlSkFd, &ctrlResp, sizeof(sg_msg_t)) > 0) {        
+        std::cout << "Got notification on ctrl socket (got aggregated value = "
+                  << ntohl(*(uint32_t*)ctrlResp.body) << "), ready to read from worker sockets\n";
+
 
         // We can read the individual sockets now
         RESP_AGGREGATION_TYPE userspace_aggregated_value = 0;
         sg_msg_t resp;
+
+        // instead of this loop, can we use io_uring to batch the reads into a single syscall
+
         for (const auto workerSock : workerFds) {
             if (read(workerSock, &resp, sizeof(sg_msg_t)) > 0) {
                 auto data = ntohl(*(uint32_t*)resp.body);

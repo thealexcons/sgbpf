@@ -202,26 +202,6 @@ static __u64 reset_worker_status(void* map, worker_info_t* worker, worker_resp_s
 
 
 
-static __always_inline unsigned short checksum(unsigned short *buf, int bufsz) {
-    unsigned long sum = 0;
-
-    while (bufsz > 1) {
-        sum += *buf;
-        buf++;
-        bufsz -= 2;
-    }
-
-    if (bufsz == 1)
-        sum += *(unsigned char *)buf;
-
-    sum = (sum & 0xffff0000) + (sum & 0xffff);
-    sum = (sum & 0xffff0000) + (sum & 0xffff);
-
-    return ~sum;
-}
-
-
-
 SEC("xdp")
 int gather_prog(struct xdp_md* ctx) {
     void* data = (void *)(long)ctx->data;
@@ -300,29 +280,6 @@ int gather_prog(struct xdp_md* ctx) {
     // Set the flag in the payload for the upper layer programs
     resp_msg->flags = SG_MSG_F_PROCESSED;
 
-    // // if this was the last packet, notify the control socket
-    // __u8 still_waiting = 0;
-    // bpf_for_each_map_elem(&map_workers_resp_status, check_worker_status, &still_waiting, 0);
-
-    // if (!still_waiting) {
-    //     bpf_printk("Got last packet!");
-
-    //     // how to do this?
-    //     __u16* port = bpf_map_lookup_elem(&map_gather_ctrl_port, &ZERO_IDX);
-    //     if (!port)
-    //         return XDP_DROP;
-        
-    //     udph->dest = *port;
-    //     udph->check = 0;
-    //     udph->check = checksum((unsigned short *)udph, sizeof(struct udphdr));
-
-    //     // Mark the packet as done
-
-    //     // MAYBE just do this specific redirection in TC layer
-    // }
-
-
-
     return XDP_PASS;
 }
 
@@ -354,9 +311,6 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         return TC_ACT_OK;
 
 
-    // CHECK THE FORMAT OF THE PAYLOAD TO MAKE SURE IT IS A GATHER MESSAGE
-    // AND FLAGS IS SET TO 1
-
     __u32 payload_size = bpf_ntohs(udph->len) - sizeof(struct udphdr);
     if (payload_size != sizeof(sg_msg_t))
         return TC_ACT_OK;
@@ -374,25 +328,28 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
     bpf_for_each_map_elem(&map_workers_resp_status, check_worker_status, &still_waiting, 0);
 
     if (!still_waiting) {        
-        const __u16 worker_port = udph->dest;
-
-        __u16* port = bpf_map_lookup_elem(&map_gather_ctrl_port, &ZERO_IDX);
-        if (!port)
+        __u16* ctrl_sk_port = bpf_map_lookup_elem(&map_gather_ctrl_port, &ZERO_IDX);
+        if (!ctrl_sk_port)
             return TC_ACT_SHOT;
         
-        // Notify the gather control socket
-        bpf_skb_store_bytes(skb, UDP_DEST_OFF, port, sizeof(*port), BPF_F_RECOMPUTE_CSUM);
+        // Send the incoming packet to the final worker
         bpf_clone_redirect(skb, skb->ifindex, 0);
 
-        bpf_skb_store_bytes(skb, UDP_DEST_OFF, &worker_port, sizeof(worker_port), BPF_F_RECOMPUTE_CSUM);
+        // Notify the control socket with the final aggregated value
+        RESP_AGGREGATION_TYPE* agg_resp = bpf_map_lookup_elem(&map_aggregated_response, &ZERO_IDX);
+        if (!agg_resp)
+            return TC_ACT_SHOT;
+
+        RESP_AGGREGATION_TYPE agg_resp_val = bpf_htonl(*agg_resp);  // conversion not strictly needed, as long as app reads in correct form
+        unsigned offset = ETH_HLEN + sizeof(struct iphdr) + sizeof(struct udphdr) + offsetof(sg_msg_t, body);
+        bpf_skb_store_bytes(skb, offset, &agg_resp_val, sizeof(agg_resp_val), BPF_F_RECOMPUTE_CSUM);
+        bpf_skb_store_bytes(skb, UDP_DEST_OFF, ctrl_sk_port, sizeof(*ctrl_sk_port), BPF_F_RECOMPUTE_CSUM);
         
         // RESET
         bpf_for_each_map_elem(&map_workers_resp_status, reset_worker_status, &still_waiting, 0);
     }
 
-
     return TC_ACT_OK;
-
 }
 
 

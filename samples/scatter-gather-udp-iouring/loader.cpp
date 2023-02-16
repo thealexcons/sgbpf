@@ -14,7 +14,7 @@
 
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
-
+#include <liburing.h>
 #include <csignal>
 
 #include "common.h"
@@ -27,6 +27,9 @@ extern "C" {
 
 using namespace std::chrono_literals;
 
+
+#define MAX_MESSAGE_LEN     sizeof(sg_msg_t)
+#define BUFFERS_COUNT       1024
 
 static int ifindex = -1;
 static const uint16_t PORT = 9223;
@@ -127,6 +130,31 @@ std::pair<bpf_tc_hook, bpf_tc_opts> attach_tc_program(int ifindex, int progFd, b
     return { tcHook, tcOpts };
 }
 
+enum {
+    ACCEPT,
+    READ,
+    WRITE,
+    PROV_BUF,
+};
+
+typedef struct conn_info {
+    __u32 fd;
+    __u16 type;
+    __u16 bid;
+} conn_info;
+
+void add_socket_read(struct io_uring *ring, int fd, unsigned gid, size_t message_size, unsigned flags) {
+    struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
+    io_uring_prep_recv(sqe, fd, NULL, message_size, 0);
+    io_uring_sqe_set_flags(sqe, flags);
+    sqe->buf_group = gid;
+
+    conn_info conn_i = {
+        .fd = fd,
+        .type = READ,
+    };
+    memcpy(&sqe->user_data, &conn_i, sizeof(conn_i));
+}
 
 int main(int argc, char** argv) {
     if (argc < 2) {
@@ -247,13 +275,39 @@ int main(int argc, char** argv) {
         std::cerr << "Could not bind socket\n";
         return 1;  
     }
-
     std::cout << "APP port (host) = " << PORT << " (net) = " << htons(PORT) << std::endl;
    
 
-    // Send the message to itself
-    // strncpy(buf, "SCATTER", 8);
+    // initialize io_uring
+    io_uring_params params;
+    io_uring ring;
+    memset(&params, 0, sizeof(params));
 
+    if (io_uring_queue_init_params(2048, &ring, &params) < 0) {
+        perror("io_uring_init_failed...\n");
+        exit(1);
+    }
+
+    // register buffers for buffer selection
+    struct io_uring_sqe *sqe;
+    struct io_uring_cqe *cqe;
+
+    #define GROUP_ID 1337
+
+    sqe = io_uring_get_sqe(&ring);
+    char bufs[BUFFERS_COUNT][MAX_MESSAGE_LEN] = {0};
+    io_uring_prep_provide_buffers(sqe, bufs, MAX_MESSAGE_LEN, BUFFERS_COUNT, GROUP_ID, 0);
+
+    io_uring_submit(&ring);
+    io_uring_wait_cqe(&ring, &cqe);
+    if (cqe->res < 0) {
+        printf("cqe->res = %d\n", cqe->res);
+        exit(1);
+    }
+    io_uring_cqe_seen(&ring, cqe);
+
+
+    // Send the message to itself
     const auto SCATTER_STR = "SCATTER";
 
     sg_msg_t hdr;
@@ -269,6 +323,59 @@ int main(int argc, char** argv) {
     }
     
     std::cout << "Sent scatter message" << std::endl;
+
+    // Add a socket read operation to the SQE for the ctrl socket 
+    add_socket_read(&ring, ctrlSkFd, GROUP_ID, MAX_MESSAGE_LEN, IOSQE_BUFFER_SELECT);
+
+    while (1) {
+        std::cout << "entering loop\n";
+        io_uring_submit_and_wait(&ring, 1);
+        io_uring_cqe *cqe;
+        unsigned head;
+        unsigned count = 0;
+
+        io_uring_for_each_cqe(&ring, head, cqe) {
+            ++count;
+
+            struct conn_info conn_i;
+            memcpy(&conn_i, &cqe->user_data, sizeof(conn_i));
+
+            if (conn_i.fd == ctrlSkFd) {
+                std::cout << "Got response from control socket!\n";
+            }
+
+        // https://github.com/frevib/io_uring-echo-server
+            // 
+
+            int type = conn_i.type;
+            if (cqe->res == -ENOBUFS) {
+                fprintf(stdout, "bufs in automatic buffer selection empty, this should not happen...\n");
+                fflush(stdout);
+                exit(1);
+            }
+            else if (type == READ) {
+                // int bytes_read = cqe->res;
+                int bid = cqe->flags >> 16;
+                if (cqe->res <= 0) {
+                    // read failed, re-add the buffer
+                    // add_provide_buf(&ring, bid, group_id);
+                    // connection closed or error
+                    close(conn_i.fd);
+                } else {
+                    // bytes have been read into bufs, now add write to socket sqe
+                    // add_socket_write(&ring, conn_i.fd, bid, bytes_read, 0);
+                    auto r = (sg_msg_t*) bufs[bid];
+                    std::cout << "got response: " << ntohl(*(uint32_t*)r->body) << '\n'; 
+                
+
+                
+                }
+            }
+        }
+
+        io_uring_cq_advance(&ring, count);
+    }
+
 
     //////////////////////////////////////////////////////////////////////////////////////////
 

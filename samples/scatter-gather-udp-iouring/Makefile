@@ -25,7 +25,7 @@ deinstall:
 
 
 $(LOADER): loader.cpp
-	g++ -std=c++17 -I$(LIBEBPFPP_HEADERS) -I$(LIBBPF_HEADERS) -L$(LIBEBPFPP_LIB_DIR) -L$(LIBBPF_LIB_DIR) -g -Wall $^ -o $@ -lbpf -lebpfpp
+	g++ -std=c++17 -I$(LIBEBPFPP_HEADERS) -I$(LIBBPF_HEADERS) -L$(LIBEBPFPP_LIB_DIR) -L$(LIBBPF_LIB_DIR) -g -Wall $^ -o $@ -lbpf -lebpfpp -luring
 
 
 $(SG_LOADER): sg_loader.cpp

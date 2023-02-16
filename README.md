@@ -23,3 +23,9 @@ See appendix 1 in report, but in summary:
 
 Note: When running the loader program, if you get a message about a missing shared library, you can copy
 the missed shared object to `lib/x86_64-linux-gnu` or updated the `LD_LIBRARY_PATH` path ([example](https://stackoverflow.com/questions/70696552/cannot-open-shared-object-file-no-such-file-or-directory-including-libbpf-wit)).
+
+4. Install `liburing` headers on the system:
+    ```$ git clone https://github.com/axboe/liburing```
+    ```$ cd liburing```
+    ```$ ./configure && make```
+    ```$ sudo make install```

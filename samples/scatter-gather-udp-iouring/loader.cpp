@@ -3,6 +3,7 @@
 #include <vector>
 #include <thread>
 #include <chrono>
+#include <algorithm>
 #include <sstream>
 #include <fstream>
 
@@ -239,6 +240,7 @@ int main(int argc, char** argv) {
         const worker_resp_status_t resp_status = WAITING_FOR_RESPONSE;
         workersHashMap.update(&w, &resp_status);
     }
+    std::sort(workerFds.begin(), workerFds.end());
 
     // Prepare the gather control socket
     uint16_t ctrlPort = htons(9999);
@@ -327,8 +329,13 @@ int main(int argc, char** argv) {
     // Add a socket read operation to the SQE for the ctrl socket 
     add_socket_read(&ring, ctrlSkFd, GROUP_ID, MAX_MESSAGE_LEN, IOSQE_BUFFER_SELECT);
 
+    RESP_AGGREGATION_TYPE userspace_aggregated_value;
+    std::vector<int> processedWorkerFds;
+
     while (1) {
-        std::cout << "entering loop\n";
+        std::cout << "entering event loop\n";
+        // Submit and wait for completion (alternatively, omit _and_wait() for busy wait polling)
+        // Also, see kernel thread polling mode to avoid any syscalls at all (but has high CPU usage)
         io_uring_submit_and_wait(&ring, 1);
         io_uring_cqe *cqe;
         unsigned head;
@@ -337,15 +344,8 @@ int main(int argc, char** argv) {
         io_uring_for_each_cqe(&ring, head, cqe) {
             ++count;
 
-            struct conn_info conn_i;
+            conn_info conn_i;
             memcpy(&conn_i, &cqe->user_data, sizeof(conn_i));
-
-            if (conn_i.fd == ctrlSkFd) {
-                std::cout << "Got response from control socket!\n";
-            }
-
-        // https://github.com/frevib/io_uring-echo-server
-            // 
 
             int type = conn_i.type;
             if (cqe->res == -ENOBUFS) {
@@ -353,27 +353,55 @@ int main(int argc, char** argv) {
                 fflush(stdout);
                 exit(1);
             }
-            else if (type == READ) {
+            
+            if (conn_i.type == READ) {
                 // int bytes_read = cqe->res;
-                int bid = cqe->flags >> 16;
+                int buff_id = cqe->flags >> 16;
                 if (cqe->res <= 0) {
                     // read failed, re-add the buffer
-                    // add_provide_buf(&ring, bid, group_id);
+                    // add_provide_buf(&ring, buff_id, group_id);
                     // connection closed or error
                     close(conn_i.fd);
                 } else {
-                    // bytes have been read into bufs, now add write to socket sqe
-                    // add_socket_write(&ring, conn_i.fd, bid, bytes_read, 0);
-                    auto r = (sg_msg_t*) bufs[bid];
-                    std::cout << "got response: " << ntohl(*(uint32_t*)r->body) << '\n'; 
-                
+                    
+                    // this is a notification on the ctrl socket
+                    if (conn_i.fd == ctrlSkFd) {
+                        auto r = (sg_msg_t*) bufs[buff_id];
+                        std::cout << "got response: " << ntohl(*(uint32_t*)r->body) << '\n';
 
-                
+                        // add requests to read from worker sockets
+                        // DISCUSSION: is this even needed now? io_uring will automatically
+                        // know when these sockets are ready to read, so this initial check on the
+                        // control socket is not really necessary
+                        for (auto wfd : workerFds) {
+                            add_socket_read(&ring, wfd, GROUP_ID, MAX_MESSAGE_LEN, IOSQE_BUFFER_SELECT);
+                        }
+
+                        userspace_aggregated_value = 0; // reset value
+                        processedWorkerFds = {};
+
+                    } else {
+                        // get individual response from worker socket
+                        // need to keep track whether we have received all responses
+                        // because we cannot loop over them explicity
+
+                        processedWorkerFds.push_back(conn_i.fd);
+                        auto r = (sg_msg_t*) bufs[buff_id];
+                        auto data = ntohl(*(uint32_t*) r->body);
+                        userspace_aggregated_value += data;
+                    }
                 }
             }
         }
 
         io_uring_cq_advance(&ring, count);
+
+        // Have we read all the individual responses from the worker sockets?
+        std::sort(processedWorkerFds.begin(), processedWorkerFds.end());
+        if (processedWorkerFds == workerFds) {
+            std::cout << "Aggregated value in user-space = " << userspace_aggregated_value << std::endl;
+            break;
+        }
     }
 
 
@@ -389,27 +417,27 @@ int main(int argc, char** argv) {
     // back the final value
 
     // Wait on ctrlSkFd until we receive a notification
-    sg_msg_t ctrlResp;
-    if (read(ctrlSkFd, &ctrlResp, sizeof(sg_msg_t)) > 0) {        
-        std::cout << "Got notification on ctrl socket (got aggregated value = "
-                  << ntohl(*(uint32_t*)ctrlResp.body) << "), ready to read from worker sockets\n";
+    // sg_msg_t ctrlResp;
+    // if (read(ctrlSkFd, &ctrlResp, sizeof(sg_msg_t)) > 0) {        
+    //     std::cout << "Got notification on ctrl socket (got aggregated value = "
+    //               << ntohl(*(uint32_t*)ctrlResp.body) << "), ready to read from worker sockets\n";
 
 
-        // We can read the individual sockets now
-        RESP_AGGREGATION_TYPE userspace_aggregated_value = 0;
-        sg_msg_t resp;
+    //     // We can read the individual sockets now
+    //     RESP_AGGREGATION_TYPE userspace_aggregated_value = 0;
+    //     sg_msg_t resp;
 
-        // instead of this loop, can we use io_uring to batch the reads into a single syscall
+    //     // instead of this loop, can we use io_uring to batch the reads into a single syscall
 
-        for (const auto workerSock : workerFds) {
-            if (read(workerSock, &resp, sizeof(sg_msg_t)) > 0) {
-                auto data = ntohl(*(uint32_t*)resp.body);
-                userspace_aggregated_value += data;
-                std::cout << "Got resp from worker " << workerSock << ": " << data << " for request ID " << resp.req_id << std::endl;
-            }
-        }
-        std::cout << "Aggregated value in user-space = " << userspace_aggregated_value << std::endl;
-    }
+    //     for (const auto workerSock : workerFds) {
+    //         if (read(workerSock, &resp, sizeof(sg_msg_t)) > 0) {
+    //             auto data = ntohl(*(uint32_t*)resp.body);
+    //             userspace_aggregated_value += data;
+    //             std::cout << "Got resp from worker " << workerSock << ": " << data << " for request ID " << resp.req_id << std::endl;
+    //         }
+    //     }
+    //     std::cout << "Aggregated value in user-space = " << userspace_aggregated_value << std::endl;
+    // }
 
  
 

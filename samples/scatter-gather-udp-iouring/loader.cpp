@@ -290,16 +290,15 @@ int main(int argc, char** argv) {
         exit(1);
     }
 
-    // register buffers for buffer selection
-    struct io_uring_sqe *sqe;
-    struct io_uring_cqe *cqe;
-
     #define GROUP_ID 1337
+
+    // register buffers for buffer selection
+    io_uring_sqe *sqe;
+    io_uring_cqe *cqe;
 
     sqe = io_uring_get_sqe(&ring);
     char bufs[BUFFERS_COUNT][MAX_MESSAGE_LEN] = {0};
     io_uring_prep_provide_buffers(sqe, bufs, MAX_MESSAGE_LEN, BUFFERS_COUNT, GROUP_ID, 0);
-
     io_uring_submit(&ring);
     io_uring_wait_cqe(&ring, &cqe);
     if (cqe->res < 0) {
@@ -311,6 +310,8 @@ int main(int argc, char** argv) {
 
     // Send the message to itself
     const auto SCATTER_STR = "SCATTER";
+
+    // TODO add the send to the io_uring queue too
 
     sg_msg_t hdr;
     memset(&hdr, 0, sizeof(sg_msg_t));
@@ -373,6 +374,18 @@ int main(int argc, char** argv) {
                         // DISCUSSION: is this even needed now? io_uring will automatically
                         // know when these sockets are ready to read, so this initial check on the
                         // control socket is not really necessary
+
+                        // TODO check when io_uring returns (multi-packet messages)
+                        // if io_uring returns as soon as any data is available, keep the ctrl socket
+                        // otherwise, the ctrl socket is not needed and we can batch all the submissions
+                        // into the queue, without any syscalls
+                        // if so, can we set the wait_nr in the io_uring_submit_and_wait() call to the number
+                        // of workers + 1???
+
+                        // TODO Investigate io_uring thread mapping?
+                        // can we have multiple io_uring instances
+                        // is the instance shared across multiple user threads?
+
                         for (auto wfd : workerFds) {
                             add_socket_read(&ring, wfd, GROUP_ID, MAX_MESSAGE_LEN, IOSQE_BUFFER_SELECT);
                         }

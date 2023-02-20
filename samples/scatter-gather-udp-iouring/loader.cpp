@@ -41,6 +41,7 @@ struct Destination {
     uint32_t    ipAddrNetBytes;
     uint16_t    port;
     uint16_t    portNetBytes;
+    int         fd;
 };
 
 std::vector<Destination> readWorkerDestinations(const std::string& fileName) {
@@ -146,7 +147,7 @@ typedef struct conn_info {
 
 void add_socket_read(struct io_uring *ring, int fd, unsigned gid, size_t message_size, unsigned flags) {
     struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
-    io_uring_prep_recv(sqe, fd, NULL, message_size, 0);
+    io_uring_prep_recv(sqe, fd, NULL, message_size, MSG_WAITALL); // wait for all fragments to arrive
     io_uring_sqe_set_flags(sqe, flags);
     sqe->buf_group = gid;
 
@@ -320,10 +321,34 @@ int main(int argc, char** argv) {
     hdr.body_len = strnlen(SCATTER_STR, BODY_LEN);
     strncpy(hdr.body, SCATTER_STR, hdr.body_len);
 
-    if (sendto(skfd, &hdr, sizeof(sg_msg_t), 0, (const struct sockaddr *)&servAddr, sizeof(sockaddr_in)) == -1) {
-        perror("sendto");
-        exit(EXIT_FAILURE);
-    }
+    // if (sendto(skfd, &hdr, sizeof(sg_msg_t), 0, (const struct sockaddr *)&servAddr, sizeof(sockaddr_in)) == -1) {
+    //     perror("sendto");
+    //     exit(EXIT_FAILURE);
+    // }
+
+    // this auxilary struct is needed for the sendmsg io_uring operation
+    struct iovec iov = {
+		.iov_base = &hdr,
+		.iov_len = sizeof(sg_msg_t),
+	};
+
+	struct msghdr msg;
+    memset(&msg, 0, sizeof(msg));
+	msg.msg_name = &servAddr;
+	msg.msg_namelen = sizeof(struct sockaddr_in);
+	msg.msg_iov = &iov;
+	msg.msg_iovlen = 1;
+
+    sqe = io_uring_get_sqe(&ring);
+    io_uring_prep_sendmsg(sqe, skfd, &msg, 0);
+    io_uring_sqe_set_flags(sqe, 0);
+
+    conn_info conn_i = {
+        .fd = skfd,
+        .type = WRITE,
+    };
+    memcpy(&sqe->user_data, &conn_i, sizeof(conn_i));
+    io_uring_submit(&ring);
     
     std::cout << "Sent scatter message" << std::endl;
 

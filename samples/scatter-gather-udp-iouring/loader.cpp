@@ -1,4 +1,3 @@
-// #include <bpf/bpf.h>
 #include <iostream>
 #include <vector>
 #include <thread>
@@ -103,40 +102,9 @@ std::pair<int, uint16_t> open_worker_socket() {
     return { workerSk, workerAddr.sin_port };
 }
 
-
-std::pair<bpf_tc_hook, bpf_tc_opts> attach_tc_program(int ifindex, int progFd, bpf_tc_attach_point attach_point) {
-    // TC API: https://github.com/libbpf/libbpf/commit/d71ff87a2dd7b92787719aab233767e9c74fbd48
-    // SEE EXAMPLE AT THE BOTTOM
-    bpf_tc_hook tcHook;
-    memset(&tcHook, 0, sizeof(bpf_tc_hook));    // also needed
-    tcHook.attach_point = attach_point;
-    tcHook.ifindex = ifindex;
-    tcHook.sz = sizeof(bpf_tc_hook);    // this is needed for some reason, otherwise it fails
-
-    auto err = bpf_tc_hook_create(&tcHook);
-	if (err && err != -EEXIST) {
-		fprintf(stderr, "Failed to create TC hook: %d\n", err);
-		exit(EXIT_FAILURE);
-	}
-
-    bpf_tc_opts tcOpts;
-    memset(&tcOpts, 0, sizeof(bpf_tc_opts));
-    tcOpts.prog_fd = progFd;
-    tcOpts.sz = sizeof(bpf_tc_opts);    // this is needed for some reason, otherwise it fails
-
-    if (bpf_tc_attach(&tcHook, &tcOpts) < 0) {
-        std::cerr << "Could not attach TC hook for egress\n";
-        exit(EXIT_FAILURE);    
-    }
-
-    return { tcHook, tcOpts };
-}
-
 enum {
-    ACCEPT,
     READ,
     WRITE,
-    PROV_BUF,
 };
 
 typedef struct conn_info {
@@ -158,6 +126,8 @@ void add_socket_read(struct io_uring *ring, int fd, unsigned gid, size_t message
     memcpy(&sqe->user_data, &conn_i, sizeof(conn_i));
 }
 
+
+
 int main(int argc, char** argv) {
     if (argc < 2) {
         std::cerr << "ERROR - Usage is: " << argv[0] << " <BPF_FILE> <INTERFACE>" << "\n";
@@ -174,39 +144,16 @@ int main(int argc, char** argv) {
         return 1;
     }
     
+    // Open and attach the eBPF programs
     ebpf::Object obj{argv[1]};
 
     auto scatterTCProg = obj.findProgramByName("scatter_prog").value();
-    std::cout << "Loaded TC prog with fd " << scatterTCProg.fd() << " and name " << scatterTCProg.name() << '\n';
-
-    std::cout << "Prog type: " << bpf_program__type(scatterTCProg.get()) << "\n";
-
-    auto maps = obj.maps();
-    for (const auto& m : maps) {
-        std::cout << "Map " << m.name() << ", ";
-    }
-    std::cout << '\n';
-
-
-    // bpf_tc_hook scatterProgTCHook;
-    // bpf_tc_opts scatterProgTCOpts;
-    // const auto tcConfig = attach_tc_program(ifindex, scatterTCProg.fd(), BPF_TC_EGRESS);
-    // std::tie(tcConfig, scatterProgTCHook, scatterProgTCOpts);
     auto scatterProgHookHandle = ebpf::TCHook::attach(ifindex, scatterTCProg, BPF_TC_EGRESS);
     
-
     auto gatherNotifyTCProg = obj.findProgramByName("notify_gather_ctrl_prog").value();
-    // bpf_tc_hook gatherNotifyProgTCHook;
-    // bpf_tc_opts gatherNotifyProgTCOpts;
-    // const auto tcConfig2 = attach_tc_program(ifindex, gatherNotifyTCProg.fd(), BPF_TC_INGRESS);
-    // std::tie(tcConfig2, gatherNotifyProgTCHook, gatherNotifyProgTCOpts);
     auto gatherNotifyProgHookHandle = ebpf::TCHook::attach(ifindex, gatherNotifyTCProg, BPF_TC_INGRESS);
 
-
-    // Attach the gather XDP program
     auto gatherXdpProg = obj.findProgramByName("gather_prog").value();
-    // bpf_xdp_attach_opts opts; // I think we can just pass in NULL
-    // bpf_xdp_attach(ifindex, gatherXdpProg.fd(), 0, 0);
     auto gatherProgHookHandle = ebpf::XDPHook::attach(ifindex, gatherXdpProg);
     
     ////////////////////////////////////////////////////////////////////////////////////////
@@ -220,8 +167,6 @@ int main(int argc, char** argv) {
 
 
     // Register the destination worker IPs and ports
-    // auto workerIpMap = obj.findMapByName("map_worker_ips").value();
-    // auto workerPortMap = obj.findMapByName("map_worker_ports").value();
     auto workersMap = obj.findMapByName("map_workers").value();
     auto workersHashMap = obj.findMapByName("map_workers_resp_status").value();
 
@@ -478,37 +423,6 @@ int main(int argc, char** argv) {
     // }
 
  
-
-    // if (recvfrom(skfd, buf, 256, 0, (struct sockaddr *)&client, &slen) == -1) {
-    //     perror("recvfrom");
-    //     exit(EXIT_FAILURE);
-    // }
-    
-    // printf("Received packet from %s:%d\nData: %s\n\n", inet_ntoa(client.sin_addr), ntohs(client.sin_port), buf);
-    
-    // sockaddr_in clientAddr;
-    // memset(&clientAddr, 0, sizeof(clientAddr));
-    // socklen_t len = sizeof(clientAddr);
-    // char buffer[1024];
-    // while (1) {
-
-    //     /*
-    //         Send UDP packets to test:
-    //         $ echo "hi" | nc -u localhost <PORT>
-    //     */
-
-    //     int n = recvfrom(skfd, buffer, sizeof(buffer), MSG_WAITALL, 
-    //                 (struct sockaddr *) &clientAddr, &len);
-        
-    //     buffer[n] = '\0';
-    //     std::string data{buffer, n-1};
-    //     std::cout << "Got: '" << data << "' from client\n";
-
-    //     std::string resp = "ack";
-    //     sendto(skfd, resp.c_str(), strlen(resp.c_str()), MSG_CONFIRM,
-    //         (const struct sockaddr*) &clientAddr, len);
-    // }
-
     // Get the aggregated value
     auto aggregatedValueMap = obj.findMapByName("map_aggregated_response").value();
     RESP_AGGREGATION_TYPE value;
@@ -518,16 +432,10 @@ int main(int argc, char** argv) {
 
     close(skfd);
 
-    // bpf_tc_detach(&scatterProgTCHook, &scatterProgTCOpts);
-    // bpf_tc_hook_destroy(&scatterProgTCHook);
+    
+    // Detach all eBPF programs
     ebpf::TCHook::detach(scatterProgHookHandle);
-
-    // bpf_tc_detach(&gatherNotifyProgTCHook, &gatherNotifyProgTCOpts);
-    // bpf_tc_hook_destroy(&gatherNotifyProgTCHook);
     ebpf::TCHook::detach(gatherNotifyProgHookHandle);
-
-
-    // bpf_xdp_detach(ifindex, 0, 0);
     ebpf::XDPHook::detach(gatherProgHookHandle);
 
     return 0;

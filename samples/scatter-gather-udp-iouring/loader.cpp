@@ -353,8 +353,13 @@ int main(int argc, char** argv) {
                         // of workers + 1???
 
                         // TODO Investigate io_uring thread mapping?
-                        // can we have multiple io_uring instances
-                        // is the instance shared across multiple user threads?
+                        // can we have multiple io_uring instances. YES
+                        // Axboe (creator of io_uring) recommends one io_ring per thread:
+                        // https://github.com/axboe/liburing/issues/571#issuecomment-1106480309
+
+                        // Article on io_uring internals and kernel threads:
+                        // https://blog.cloudflare.com/missing-manuals-io_uring-worker-pool/
+
 
                         for (auto wfd : workerFds) {
                             add_socket_read(&ring, wfd, GROUP_ID, MAX_MESSAGE_LEN, IOSQE_BUFFER_SELECT);

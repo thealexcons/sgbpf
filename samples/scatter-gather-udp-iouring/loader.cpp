@@ -114,7 +114,7 @@ typedef struct conn_info {
 } conn_info;
 
 void add_socket_read(struct io_uring *ring, int fd, unsigned gid, size_t message_size, unsigned flags) {
-    struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
+    io_uring_sqe *sqe = io_uring_get_sqe(ring);
     io_uring_prep_recv(sqe, fd, NULL, message_size, MSG_WAITALL); // wait for all fragments to arrive
     io_uring_sqe_set_flags(sqe, flags);
     sqe->buf_group = gid;
@@ -126,6 +126,40 @@ void add_socket_read(struct io_uring *ring, int fd, unsigned gid, size_t message
     memcpy(&sqe->user_data, &conn_i, sizeof(conn_i));
 }
 
+
+void add_scatter_send(struct io_uring* ring, int skfd, sockaddr_in* servAddr) {
+    // Send the message to itself
+    const auto SCATTER_STR = "SCATTER";
+    sg_msg_t hdr;
+    memset(&hdr, 0, sizeof(sg_msg_t));
+    hdr.req_id = 1;
+    hdr.msg_type = SCATTER_MSG;
+    hdr.body_len = strnlen(SCATTER_STR, BODY_LEN);
+    strncpy(hdr.body, SCATTER_STR, hdr.body_len);
+
+    // this auxilary struct is needed for the sendmsg io_uring operation
+    struct iovec iov = {
+		.iov_base = &hdr,
+		.iov_len = sizeof(sg_msg_t),
+	};
+
+	struct msghdr msg;
+    memset(&msg, 0, sizeof(msg));
+	msg.msg_name = servAddr;
+	msg.msg_namelen = sizeof(struct sockaddr_in);
+	msg.msg_iov = &iov;
+	msg.msg_iovlen = 1;
+
+    io_uring_sqe *sqe = io_uring_get_sqe(ring);
+    io_uring_prep_sendmsg(sqe, skfd, &msg, 0); // TODO look into sendmsg_zc (zero-copy)
+    io_uring_sqe_set_flags(sqe, 0);
+
+    conn_info conn_i = {
+        .fd = skfd,
+        .type = WRITE,
+    };
+    memcpy(&sqe->user_data, &conn_i, sizeof(conn_i));
+}
 
 
 int main(int argc, char** argv) {
@@ -254,71 +288,38 @@ int main(int argc, char** argv) {
     io_uring_cqe_seen(&ring, cqe);
 
 
-    // Send the message to itself
-    const auto SCATTER_STR = "SCATTER";
-
-    // TODO add the send to the io_uring queue too
-
-    sg_msg_t hdr;
-    memset(&hdr, 0, sizeof(sg_msg_t));
-    hdr.req_id = 1;
-    hdr.msg_type = SCATTER_MSG;
-    hdr.body_len = strnlen(SCATTER_STR, BODY_LEN);
-    strncpy(hdr.body, SCATTER_STR, hdr.body_len);
-
-    // if (sendto(skfd, &hdr, sizeof(sg_msg_t), 0, (const struct sockaddr *)&servAddr, sizeof(sockaddr_in)) == -1) {
-    //     perror("sendto");
-    //     exit(EXIT_FAILURE);
-    // }
-
-    // this auxilary struct is needed for the sendmsg io_uring operation
-    struct iovec iov = {
-		.iov_base = &hdr,
-		.iov_len = sizeof(sg_msg_t),
-	};
-
-	struct msghdr msg;
-    memset(&msg, 0, sizeof(msg));
-	msg.msg_name = &servAddr;
-	msg.msg_namelen = sizeof(struct sockaddr_in);
-	msg.msg_iov = &iov;
-	msg.msg_iovlen = 1;
-
-    sqe = io_uring_get_sqe(&ring);
-    io_uring_prep_sendmsg(sqe, skfd, &msg, 0);
-    io_uring_sqe_set_flags(sqe, 0);
-
-    conn_info conn_i = {
-        .fd = skfd,
-        .type = WRITE,
-    };
-    memcpy(&sqe->user_data, &conn_i, sizeof(conn_i));
-    io_uring_submit(&ring);
-    
+    // add the scatter send operation to the SQ for the outgoing socket
+    add_scatter_send(&ring, skfd, &servAddr);
+    // io_uring_submit(&ring);
     std::cout << "Sent scatter message" << std::endl;
 
-    // Add a socket read operation to the SQE for the ctrl socket 
-    add_socket_read(&ring, ctrlSkFd, GROUP_ID, MAX_MESSAGE_LEN, IOSQE_BUFFER_SELECT);
+    // Add all the socket read operations
+    // add_socket_read(&ring, ctrlSkFd, GROUP_ID, MAX_MESSAGE_LEN, IOSQE_BUFFER_SELECT);
+    for (auto wfd : workerFds) {
+        add_socket_read(&ring, wfd, GROUP_ID, MAX_MESSAGE_LEN, IOSQE_BUFFER_SELECT);
+    }
 
-    RESP_AGGREGATION_TYPE userspace_aggregated_value;
+    // Submit the IO requests for all the worker sockets and the write socket
+    io_uring_submit_and_wait(&ring, workerFds.size() + 1);
+
+    // Submit and wait for completion (alternatively, omit _and_wait() for busy wait polling)
+    // Also, see kernel thread polling mode to avoid any syscalls at all (but has high CPU usage)
+
+    RESP_AGGREGATION_TYPE userspace_aggregated_value = 0;
     std::vector<int> processedWorkerFds;
 
     while (1) {
-        std::cout << "entering event loop\n";
-        // Submit and wait for completion (alternatively, omit _and_wait() for busy wait polling)
-        // Also, see kernel thread polling mode to avoid any syscalls at all (but has high CPU usage)
-        io_uring_submit_and_wait(&ring, 1);
+        std::cout << "entering event loop\n";       
         io_uring_cqe *cqe;
-        unsigned head;
         unsigned count = 0;
+        unsigned head;
 
         io_uring_for_each_cqe(&ring, head, cqe) {
             ++count;
 
             conn_info conn_i;
-            memcpy(&conn_i, &cqe->user_data, sizeof(conn_i));
+            memcpy(&conn_i, &cqe->user_data, sizeof(conn_i)); // TODO cast cqe->user_data to conn_i instead?
 
-            int type = conn_i.type;
             if (cqe->res == -ENOBUFS) {
                 fprintf(stdout, "bufs in automatic buffer selection empty, this should not happen...\n");
                 fflush(stdout);
@@ -335,10 +336,17 @@ int main(int argc, char** argv) {
                     close(conn_i.fd);
                 } else {
                     
+                    processedWorkerFds.push_back(conn_i.fd);
+                    auto r = (sg_msg_t*) bufs[buff_id];
+                    auto data = ntohl(*(uint32_t*) r->body);
+                    userspace_aggregated_value += data;
+                    std::cout << "got response from worker socket: " << ntohl(*(uint32_t*)r->body) << std::endl;
+                
+
                     // this is a notification on the ctrl socket
-                    if (conn_i.fd == ctrlSkFd) {
-                        auto r = (sg_msg_t*) bufs[buff_id];
-                        std::cout << "got response: " << ntohl(*(uint32_t*)r->body) << '\n';
+                    // if (conn_i.fd == ctrlSkFd) {
+                    //     auto r = (sg_msg_t*) bufs[buff_id];
+                    //     std::cout << "got response from ctrl socket: " << ntohl(*(uint32_t*)r->body) << std::endl;
 
                         // add requests to read from worker sockets
                         // DISCUSSION: is this even needed now? io_uring will automatically
@@ -361,28 +369,29 @@ int main(int argc, char** argv) {
                         // https://blog.cloudflare.com/missing-manuals-io_uring-worker-pool/
 
 
-                        for (auto wfd : workerFds) {
-                            add_socket_read(&ring, wfd, GROUP_ID, MAX_MESSAGE_LEN, IOSQE_BUFFER_SELECT);
-                        }
+                        // for (auto wfd : workerFds) {
+                        //     add_socket_read(&ring, wfd, GROUP_ID, MAX_MESSAGE_LEN, IOSQE_BUFFER_SELECT);
+                        // }
 
-                        userspace_aggregated_value = 0; // reset value
-                        processedWorkerFds = {};
+                        // userspace_aggregated_value = 0; // reset value
+                        // processedWorkerFds = {};
 
-                    } else {
-                        // get individual response from worker socket
-                        // need to keep track whether we have received all responses
-                        // because we cannot loop over them explicity
+                    // } else {
+                    //     // get individual response from worker socket
+                    //     // need to keep track whether we have received all responses
+                    //     // because we cannot loop over them explicity
 
-                        processedWorkerFds.push_back(conn_i.fd);
-                        auto r = (sg_msg_t*) bufs[buff_id];
-                        auto data = ntohl(*(uint32_t*) r->body);
-                        userspace_aggregated_value += data;
-                    }
+                    //     processedWorkerFds.push_back(conn_i.fd);
+                    //     auto r = (sg_msg_t*) bufs[buff_id];
+                    //     auto data = ntohl(*(uint32_t*) r->body);
+                    //     userspace_aggregated_value += data;
+                    //     std::cout << "got response from worker socket: " << ntohl(*(uint32_t*)r->body) << std::endl;
+
+                    // }
                 }
             }
         }
 
-        io_uring_cq_advance(&ring, count);
 
         // Have we read all the individual responses from the worker sockets?
         std::sort(processedWorkerFds.begin(), processedWorkerFds.end());
@@ -390,6 +399,9 @@ int main(int argc, char** argv) {
             std::cout << "Aggregated value in user-space = " << userspace_aggregated_value << std::endl;
             break;
         }
+
+        io_uring_cq_advance(&ring, count);
+        io_uring_submit_and_wait(&ring, 1);
     }
 
 

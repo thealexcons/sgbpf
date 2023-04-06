@@ -142,15 +142,9 @@ int scatter_prog(struct __sk_buff* skb) {
         if ((void*) payload + payload_size > data_end)
             return TC_ACT_OK;
 
-
         sg_msg_t* sgh = (sg_msg_t*) payload; 
         if (sgh->msg_type != SCATTER_MSG)
             return TC_ACT_OK;
-
-        const char* s = "SCATTER";
-        if (!strncmp(sgh->body, s, 8))
-            return TC_ACT_OK;
-    
 
         bpf_printk("Got SCATTER request");
 
@@ -236,12 +230,12 @@ int gather_prog(struct xdp_md* ctx) {
     worker.worker_ip = iph->saddr;
     worker.worker_port = udph->source;
     worker.app_port = udph->dest;
+
+    // we only check that the worker is valid, we don't check for duplicates now
     worker_resp_status_t* status = bpf_map_lookup_elem(&map_workers_resp_status, &worker);
-    if (!status || *status == RECEIVED_RESPONSE)
+    if (!status) {
         return XDP_PASS;
-
-
-    bpf_printk("Is from a NEW worker!");
+    }
 
     __u32 payload_size = bpf_ntohs(udph->len) - sizeof(struct udphdr);
     bpf_printk("Payload size: %d", payload_size);
@@ -249,20 +243,27 @@ int gather_prog(struct xdp_md* ctx) {
     // Note: this equality is needed so that the comparison size is known
     // at compile-time for the loop unrolling.
     if (payload_size != sizeof(sg_msg_t))
-        return TC_ACT_OK;
+        return XDP_DROP;
 
     char* payload = (char*) udph + sizeof(struct udphdr);
     if ((void*) payload + payload_size > data_end)
-        return TC_ACT_OK;
+        return XDP_DROP;
 
 
     sg_msg_t* resp_msg = (sg_msg_t*) payload;
     if (resp_msg->msg_type != GATHER_MSG)
-        return TC_ACT_OK;
+        return XDP_DROP;
+
+    // If this is a multi-packet message, forward the packet without aggregation
+    if (resp_msg->num_pks > 1 && resp_msg->seq_num <= resp_msg->num_pks) {
+        bpf_printk("Got packet with req ID = %d and seq num = %d", resp_msg->req_id, resp_msg->seq_num);
+        return XDP_PASS;
+    }
+
 
     // Get the int the worker responded with
     __u32 resp = bpf_ntohl(*((__u32 *) resp_msg->body));
-    bpf_printk("Got packet from worker %d with payload = %d for req ID = %d", bpf_ntohs(udph->source), resp, resp_msg->req_id);
+    bpf_printk("Got packet with payload = %d for req ID = %d and seq num = %d", resp, resp_msg->req_id, resp_msg->seq_num);
 
     // Aggregate the value
     RESP_AGGREGATION_TYPE* agg_resp = bpf_map_lookup_elem(&map_aggregated_response, &ZERO_IDX);
@@ -274,11 +275,11 @@ int gather_prog(struct xdp_md* ctx) {
     bpf_map_update_elem(&map_aggregated_response, &ZERO_IDX, &updated_resp, 0);
 
     // Flag that this worker is completed
-    worker_resp_status_t updated_status = RECEIVED_RESPONSE; // cannot recycle pointers returned by map lookups!
-    bpf_map_update_elem(&map_workers_resp_status, &worker, &updated_status, 0);
+    // worker_resp_status_t updated_status = RECEIVED_RESPONSE; // cannot recycle pointers returned by map lookups!
+    // bpf_map_update_elem(&map_workers_resp_status, &worker, &updated_status, 0);
 
     // Set the flag in the payload for the upper layer programs
-    resp_msg->flags = SG_MSG_F_PROCESSED;
+    // resp_msg->flags = SG_MSG_F_PROCESSED;
 
     return XDP_PASS;
 }
@@ -327,7 +328,8 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
     __u8 still_waiting = 0;
     bpf_for_each_map_elem(&map_workers_resp_status, check_worker_status, &still_waiting, 0);
 
-    if (!still_waiting) {        
+    if (!still_waiting) { 
+        bpf_printk("!!!!!!!!!!!! NOTIFYING CTRL SOCKET !!!!!!!!!!!!!!!11");       
         __u16* ctrl_sk_port = bpf_map_lookup_elem(&map_gather_ctrl_port, &ZERO_IDX);
         if (!ctrl_sk_port)
             return TC_ACT_SHOT;

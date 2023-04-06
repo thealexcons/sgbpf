@@ -27,6 +27,8 @@ typedef struct worker_info {
 
 typedef struct __attribute__((packed)) {
     unsigned int    req_id;         // The request ID
+    unsigned int    seq_num;        // The sequence number in a multi-packet msg
+    unsigned int    num_pks;        // The number of packets in a multi-packet msg
     unsigned int    body_len;       // The length of the body in bytes
     unsigned char   msg_type;       // The message type (SCATTER or GATHER)
     unsigned char   flags;          // Extra flags

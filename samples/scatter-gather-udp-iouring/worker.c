@@ -12,15 +12,7 @@
 #define WORKER_PORT 5555
 // #define COORDINATOR_PORT 9223
 
-
-typedef struct __attribute__((packed)) {
-    unsigned int    req_id;         // The request ID
-    unsigned int    body_len;       // The length of the body in bytes
-    unsigned char   msg_type;       // The message type (SCATTER or GATHER)
-    unsigned char   flags;          // Extra flags
-    char            body[256];      // The body data, up to 256 bytes
-} sg_msg_t;
-
+#include "common.h"
 
 int main(int argc, char *argv[]) {
 
@@ -71,7 +63,7 @@ int main(int argc, char *argv[]) {
     sg_msg_t* msg = (sg_msg_t*) message;
 
 
-    printf("recv: '%s' with req ID %d from %d\n", msg->body, msg->req_id, ntohs(client.sin_port));
+    printf("\n\nrecv: '%s' with req ID %d from %d\n", (msg->msg_type == SCATTER_MSG ? "scatter msg" : "unknown"), msg->req_id, ntohs(client.sin_port));
 
     /* Send the message in buf to the server */
 
@@ -82,17 +74,25 @@ int main(int argc, char *argv[]) {
     sg_msg_t resp_msg;
     memset(&resp_msg, 0, sizeof(resp_msg));
     resp_msg.req_id = msg->req_id;
+    resp_msg.seq_num = 1;
+    resp_msg.num_pks = 2;
     resp_msg.msg_type = 1;  // GATHER Msg
     resp_msg.body_len = sizeof(uint32_t);
     
     uint32_t res = htonl(worker_port);
     memmove(resp_msg.body, &res, resp_msg.body_len);
-
-    printf("Sending my port back\n");
     if (sendto(sock, &resp_msg, sizeof(sg_msg_t), 0, (struct sockaddr *)&client, clientSize) < 0) {
         perror("sendto()");
         exit(2);
     }
+
+    resp_msg.seq_num = 2;
+    if (sendto(sock, &resp_msg, sizeof(sg_msg_t), 0, (struct sockaddr *)&client, clientSize) < 0) {
+        perror("sendto()");
+        exit(2);
+    }
+    
+    printf("Sending port back twice in 2 packets\n");
 
   }
 

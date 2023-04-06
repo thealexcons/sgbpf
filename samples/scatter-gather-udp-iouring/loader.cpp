@@ -184,8 +184,9 @@ int main(int argc, char** argv) {
     auto scatterTCProg = obj.findProgramByName("scatter_prog").value();
     auto scatterProgHookHandle = ebpf::TCHook::attach(ifindex, scatterTCProg, BPF_TC_EGRESS);
     
-    auto gatherNotifyTCProg = obj.findProgramByName("notify_gather_ctrl_prog").value();
-    auto gatherNotifyProgHookHandle = ebpf::TCHook::attach(ifindex, gatherNotifyTCProg, BPF_TC_INGRESS);
+    // NOT needed if we ignore the ctrl socket notification
+    // auto gatherNotifyTCProg = obj.findProgramByName("notify_gather_ctrl_prog").value();
+    // auto gatherNotifyProgHookHandle = ebpf::TCHook::attach(ifindex, gatherNotifyTCProg, BPF_TC_INGRESS);
 
     auto gatherXdpProg = obj.findProgramByName("gather_prog").value();
     auto gatherProgHookHandle = ebpf::XDPHook::attach(ifindex, gatherXdpProg);
@@ -308,6 +309,10 @@ int main(int argc, char** argv) {
     RESP_AGGREGATION_TYPE userspace_aggregated_value = 0;
     std::vector<int> processedWorkerFds;
 
+    std::unordered_map<int, std::vector<RESP_AGGREGATION_TYPE>> multiPacketMessages;
+    std::unordered_map<int, int> multiPacketMessagesCount;
+    int packetsPerMsgExpected = 1;
+
     while (1) {
         std::cout << "entering event loop\n";       
         io_uring_cqe *cqe;
@@ -337,11 +342,31 @@ int main(int argc, char** argv) {
                 } else {
                     
                     processedWorkerFds.push_back(conn_i.fd);
-                    auto r = (sg_msg_t*) bufs[buff_id];
-                    auto data = ntohl(*(uint32_t*) r->body);
+                    auto resp = (sg_msg_t*) bufs[buff_id];
+
+
+                    auto data = ntohl(*(uint32_t*) resp->body);
                     userspace_aggregated_value += data;
-                    std::cout << "got response from worker socket: " << ntohl(*(uint32_t*)r->body) << std::endl;
+                    std::cout << "got response from worker socket: " << ntohl(*(uint32_t*)resp->body) 
+                              << " with seq num = " << resp->seq_num << std::endl;
                 
+                    // TODO merge logic for single and multi-packet processing
+                    // careful with indexing and resize
+
+                    // check for multi-packet message
+                    if (packetsPerMsgExpected != resp->num_pks && resp->num_pks > 1) {
+                        packetsPerMsgExpected = resp->num_pks;
+
+                        // reserve slots for each packet body
+                        for (auto wfd : workerFds)
+                            multiPacketMessages[wfd].resize(resp->num_pks);                        
+                    }
+
+                    if (resp->num_pks > 1 && resp->seq_num > 0 && resp->seq_num <= resp->num_pks) {
+                        multiPacketMessages[conn_i.fd][resp->seq_num - 1] = std::move(data);
+                        multiPacketMessagesCount[conn_i.fd]++;
+                    }
+
 
                     // this is a notification on the ctrl socket
                     // if (conn_i.fd == ctrlSkFd) {
@@ -392,16 +417,35 @@ int main(int argc, char** argv) {
             }
         }
 
+        int remaining = 0;
 
-        // Have we read all the individual responses from the worker sockets?
-        std::sort(processedWorkerFds.begin(), processedWorkerFds.end());
-        if (processedWorkerFds == workerFds) {
-            std::cout << "Aggregated value in user-space = " << userspace_aggregated_value << std::endl;
-            break;
+        if (packetsPerMsgExpected == 1) {
+            // Have we read all the individual responses from the worker sockets?
+            std::sort(processedWorkerFds.begin(), processedWorkerFds.end());
+            if (processedWorkerFds == workerFds) {
+                std::cout << "Aggregated value in user-space = " << userspace_aggregated_value << std::endl;
+                break;
+            }
+        }
+        else    // check for multi-packet completion
+        {
+            for (const auto& [wfd, pks] : multiPacketMessagesCount) {
+                if (pks != packetsPerMsgExpected) {
+                    remaining += abs(packetsPerMsgExpected - pks);
+                    add_socket_read(&ring, wfd, GROUP_ID, MAX_MESSAGE_LEN, IOSQE_BUFFER_SELECT);
+                }
+            }
+
+            std::cout << "Remaining packets: " << remaining << std::endl;
+
+            if (!remaining) {
+                std::cout << "Aggregated (multi-packet) value in user-space = " << userspace_aggregated_value << std::endl;
+                break;
+            }
         }
 
         io_uring_cq_advance(&ring, count);
-        io_uring_submit_and_wait(&ring, 1);
+        io_uring_submit_and_wait(&ring, remaining);
     }
 
 
@@ -452,7 +496,7 @@ int main(int argc, char** argv) {
     
     // Detach all eBPF programs
     ebpf::TCHook::detach(scatterProgHookHandle);
-    ebpf::TCHook::detach(gatherNotifyProgHookHandle);
+    // ebpf::TCHook::detach(gatherNotifyProgHookHandle);
     ebpf::XDPHook::detach(gatherProgHookHandle);
 
     return 0;

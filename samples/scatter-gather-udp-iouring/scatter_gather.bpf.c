@@ -132,18 +132,22 @@ int scatter_prog(struct __sk_buff* skb) {
     if (udph->dest == udph->source && udph->source == *local_application_port) {
         
         __u32 payload_size = bpf_ntohs(udph->len) - sizeof(struct udphdr);
+        bpf_printk("payload size: %d   sizeof(sg_msg_t) = %d", payload_size, sizeof(sg_msg_t));
 
         // Note: this equality is needed so that the comparison size is known
         // at compile-time for the loop unrolling.
         if (payload_size != sizeof(sg_msg_t))
             return TC_ACT_OK;
-
+            
         char* payload = (char*) udph + sizeof(struct udphdr);
-        if ((void*) payload + payload_size > data_end)
+        if ((void*) payload + payload_size > data_end) {
+            // data_end - data = MTU size + ETH_HDR (14 bytes)
+            bpf_printk("Invalid packet size: payload might be larger than MTU");
             return TC_ACT_OK;
+        }
 
         sg_msg_t* sgh = (sg_msg_t*) payload; 
-        if (sgh->msg_type != SCATTER_MSG)
+        if (sgh->hdr.msg_type != SCATTER_MSG)
             return TC_ACT_OK;
 
         bpf_printk("Got SCATTER request");
@@ -251,19 +255,19 @@ int gather_prog(struct xdp_md* ctx) {
 
 
     sg_msg_t* resp_msg = (sg_msg_t*) payload;
-    if (resp_msg->msg_type != GATHER_MSG)
+    if (resp_msg->hdr.msg_type != GATHER_MSG)
         return XDP_DROP;
 
     // If this is a multi-packet message, forward the packet without aggregation
-    if (resp_msg->num_pks > 1 && resp_msg->seq_num <= resp_msg->num_pks) {
-        bpf_printk("Got packet with req ID = %d and seq num = %d", resp_msg->req_id, resp_msg->seq_num);
+    if (resp_msg->hdr.num_pks > 1 && resp_msg->hdr.seq_num <= resp_msg->hdr.num_pks) {
+        bpf_printk("Got packet with req ID = %d and seq num = %d", resp_msg->hdr.req_id, resp_msg->hdr.seq_num);
         return XDP_PASS;
     }
 
 
     // Get the int the worker responded with
     __u32 resp = bpf_ntohl(*((__u32 *) resp_msg->body));
-    bpf_printk("Got packet with payload = %d for req ID = %d and seq num = %d", resp, resp_msg->req_id, resp_msg->seq_num);
+    bpf_printk("Got packet with payload = %d for req ID = %d and seq num = %d", resp, resp_msg->hdr.req_id, resp_msg->hdr.seq_num);
 
     // Aggregate the value
     RESP_AGGREGATION_TYPE* agg_resp = bpf_map_lookup_elem(&map_aggregated_response, &ZERO_IDX);
@@ -321,7 +325,7 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         return TC_ACT_OK;
 
     sg_msg_t* resp_msg = (sg_msg_t*) payload;
-    if (resp_msg->flags != SG_MSG_F_PROCESSED && resp_msg->msg_type != GATHER_MSG)
+    if (resp_msg->hdr.flags != SG_MSG_F_PROCESSED && resp_msg->hdr.msg_type != GATHER_MSG)
         return TC_ACT_OK;
 
     // if this was the last packet, notify the control socket

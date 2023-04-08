@@ -63,7 +63,8 @@ int main(int argc, char *argv[]) {
     sg_msg_t* msg = (sg_msg_t*) message;
 
 
-    printf("\n\nrecv: '%s' with req ID %d from %d\n", (msg->msg_type == SCATTER_MSG ? "scatter msg" : "unknown"), msg->req_id, ntohs(client.sin_port));
+    printf("\n\nrecv: '%s' with req ID %d from %d\n", 
+      (msg->hdr.msg_type == SCATTER_MSG ? "scatter msg" : "unknown"), msg->hdr.req_id, ntohs(client.sin_port));
 
     /* Send the message in buf to the server */
 
@@ -73,20 +74,20 @@ int main(int argc, char *argv[]) {
     // Assume writes and reads are full (no partial processing)
     sg_msg_t resp_msg;
     memset(&resp_msg, 0, sizeof(resp_msg));
-    resp_msg.req_id = msg->req_id;
-    resp_msg.seq_num = 1;
-    resp_msg.num_pks = 2;
-    resp_msg.msg_type = 1;  // GATHER Msg
-    resp_msg.body_len = sizeof(uint32_t);
+    resp_msg.hdr.req_id = msg->hdr.req_id;
+    resp_msg.hdr.seq_num = 1;
+    resp_msg.hdr.num_pks = 2;
+    resp_msg.hdr.msg_type = 1;  // GATHER Msg
+    resp_msg.hdr.body_len = sizeof(uint32_t);
     
     uint32_t res = htonl(worker_port);
-    memmove(resp_msg.body, &res, resp_msg.body_len);
+    memmove(resp_msg.body, &res, resp_msg.hdr.body_len);
     if (sendto(sock, &resp_msg, sizeof(sg_msg_t), 0, (struct sockaddr *)&client, clientSize) < 0) {
         perror("sendto()");
         exit(2);
     }
 
-    resp_msg.seq_num = 2;
+    resp_msg.hdr.seq_num = 2;
     if (sendto(sock, &resp_msg, sizeof(sg_msg_t), 0, (struct sockaddr *)&client, clientSize) < 0) {
         perror("sendto()");
         exit(2);

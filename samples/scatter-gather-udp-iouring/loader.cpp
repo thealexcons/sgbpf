@@ -130,28 +130,28 @@ void add_socket_read(struct io_uring *ring, int fd, unsigned gid, size_t message
 void add_scatter_send(struct io_uring* ring, int skfd, sockaddr_in* servAddr) {
     // Send the message to itself
     const auto SCATTER_STR = "SCATTER";
-    sg_msg_t hdr;
-    memset(&hdr, 0, sizeof(sg_msg_t));
-    hdr.req_id = 1;
-    hdr.msg_type = SCATTER_MSG;
-    hdr.body_len = strnlen(SCATTER_STR, BODY_LEN);
-    strncpy(hdr.body, SCATTER_STR, hdr.body_len);
+    sg_msg_t scatter_msg;
+    memset(&scatter_msg, 0, sizeof(sg_msg_t));
+    scatter_msg.hdr.req_id = 1;
+    scatter_msg.hdr.msg_type = SCATTER_MSG;
+    scatter_msg.hdr.body_len = strnlen(SCATTER_STR, BODY_LEN);
+    strncpy(scatter_msg.body, SCATTER_STR, scatter_msg.hdr.body_len);
 
     // this auxilary struct is needed for the sendmsg io_uring operation
     struct iovec iov = {
-		.iov_base = &hdr,
+		.iov_base = &scatter_msg,
 		.iov_len = sizeof(sg_msg_t),
 	};
 
-	struct msghdr msg;
-    memset(&msg, 0, sizeof(msg));
-	msg.msg_name = servAddr;
-	msg.msg_namelen = sizeof(struct sockaddr_in);
-	msg.msg_iov = &iov;
-	msg.msg_iovlen = 1;
+	struct msghdr msgh;
+    memset(&msgh, 0, sizeof(msgh));
+	msgh.msg_name = servAddr;
+	msgh.msg_namelen = sizeof(struct sockaddr_in);
+	msgh.msg_iov = &iov;
+	msgh.msg_iovlen = 1;
 
     io_uring_sqe *sqe = io_uring_get_sqe(ring);
-    io_uring_prep_sendmsg(sqe, skfd, &msg, 0); // TODO look into sendmsg_zc (zero-copy)
+    io_uring_prep_sendmsg(sqe, skfd, &msgh, 0); // TODO look into sendmsg_zc (zero-copy)
     io_uring_sqe_set_flags(sqe, 0);
 
     conn_info conn_i = {
@@ -310,8 +310,8 @@ int main(int argc, char** argv) {
     std::vector<int> processedWorkerFds;
 
     std::unordered_map<int, std::vector<RESP_AGGREGATION_TYPE>> multiPacketMessages;
-    std::unordered_map<int, int> multiPacketMessagesCount;
-    int packetsPerMsgExpected = 1;
+    std::unordered_map<int, uint32_t> multiPacketMessagesCount;
+    unsigned packetsPerMsgExpected = 1;
 
     while (1) {
         std::cout << "entering event loop\n";       
@@ -348,22 +348,22 @@ int main(int argc, char** argv) {
                     auto data = ntohl(*(uint32_t*) resp->body);
                     userspace_aggregated_value += data;
                     std::cout << "got response from worker socket: " << ntohl(*(uint32_t*)resp->body) 
-                              << " with seq num = " << resp->seq_num << std::endl;
+                              << " with seq num = " << resp->hdr.seq_num << std::endl;
                 
                     // TODO merge logic for single and multi-packet processing
                     // careful with indexing and resize
 
                     // check for multi-packet message
-                    if (packetsPerMsgExpected != resp->num_pks && resp->num_pks > 1) {
-                        packetsPerMsgExpected = resp->num_pks;
+                    if (packetsPerMsgExpected != resp->hdr.num_pks && resp->hdr.num_pks > 1) {
+                        packetsPerMsgExpected = resp->hdr.num_pks;
 
                         // reserve slots for each packet body
                         for (auto wfd : workerFds)
-                            multiPacketMessages[wfd].resize(resp->num_pks);                        
+                            multiPacketMessages[wfd].resize(resp->hdr.num_pks);                        
                     }
 
-                    if (resp->num_pks > 1 && resp->seq_num > 0 && resp->seq_num <= resp->num_pks) {
-                        multiPacketMessages[conn_i.fd][resp->seq_num - 1] = std::move(data);
+                    if (resp->hdr.num_pks > 1 && resp->hdr.seq_num > 0 && resp->hdr.seq_num <= resp->hdr.num_pks) {
+                        multiPacketMessages[conn_i.fd][resp->hdr.seq_num - 1] = std::move(data);
                         multiPacketMessagesCount[conn_i.fd]++;
                     }
 

@@ -352,6 +352,7 @@ int main(int argc, char** argv) {
                 
                     // TODO merge logic for single and multi-packet processing
                     // careful with indexing and resize
+                    // (ie: make data structures for MP processing generic for single-packets)
 
                     // check for multi-packet message
                     if (packetsPerMsgExpected != resp->hdr.num_pks && resp->hdr.num_pks > 1) {
@@ -430,9 +431,13 @@ int main(int argc, char** argv) {
         else    // check for multi-packet completion
         {
             for (const auto& [wfd, pks] : multiPacketMessagesCount) {
-                if (pks != packetsPerMsgExpected) {
-                    remaining += abs(packetsPerMsgExpected - pks);
-                    add_socket_read(&ring, wfd, GROUP_ID, MAX_MESSAGE_LEN, IOSQE_BUFFER_SELECT);
+                auto pksRemainingForThisWorker = abs(packetsPerMsgExpected - pks);
+                if (pksRemainingForThisWorker > 0) {
+                    remaining += pksRemainingForThisWorker;
+
+                    // Add the remaining socket read operations to the SQ
+                    for (auto i = 0; i < pksRemainingForThisWorker; i++)
+                        add_socket_read(&ring, wfd, GROUP_ID, MAX_MESSAGE_LEN, IOSQE_BUFFER_SELECT);
                 }
             }
 
@@ -446,6 +451,13 @@ int main(int argc, char** argv) {
 
         io_uring_cq_advance(&ring, count);
         io_uring_submit_and_wait(&ring, remaining);
+
+        // Regarding this extra syscall: because we do not know the number of packets per message
+        // we must dynamically set this at runtime as soon as we receive the first packet
+        // hence, this requires a second syscall with the full number of reads
+
+        // alternative would be to allow the user to configure this number of expected packets per
+        // response message at compile-time, requiring only a single syscall at the start
     }
 
 

@@ -138,7 +138,7 @@ int scatter_prog(struct __sk_buff* skb) {
         // at compile-time for the loop unrolling.
         if (payload_size != sizeof(sg_msg_t))
             return TC_ACT_OK;
-            
+
         char* payload = (char*) udph + sizeof(struct udphdr);
         if ((void*) payload + payload_size > data_end) {
             // data_end - data = MTU size + ETH_HDR (14 bytes)
@@ -242,7 +242,6 @@ int gather_prog(struct xdp_md* ctx) {
     }
 
     __u32 payload_size = bpf_ntohs(udph->len) - sizeof(struct udphdr);
-    bpf_printk("Payload size: %d", payload_size);
 
     // Note: this equality is needed so that the comparison size is known
     // at compile-time for the loop unrolling.
@@ -260,10 +259,11 @@ int gather_prog(struct xdp_md* ctx) {
 
     // If this is a multi-packet message, forward the packet without aggregation
     if (resp_msg->hdr.num_pks > 1 && resp_msg->hdr.seq_num <= resp_msg->hdr.num_pks) {
-        bpf_printk("Got packet with req ID = %d and seq num = %d", resp_msg->hdr.req_id, resp_msg->hdr.seq_num);
+        bpf_printk("[MP] [Worker %d] Got packet with req ID = %d and seq num = %d", bpf_ntohs(worker.worker_port), resp_msg->hdr.req_id, resp_msg->hdr.seq_num);
         return XDP_PASS;
     }
 
+    // Single-packet response aggregation:
 
     // Get the int the worker responded with
     __u32 resp = bpf_ntohl(*((__u32 *) resp_msg->body));

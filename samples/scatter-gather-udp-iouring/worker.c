@@ -75,26 +75,21 @@ int main(int argc, char *argv[]) {
     sg_msg_t resp_msg;
     memset(&resp_msg, 0, sizeof(resp_msg));
     resp_msg.hdr.req_id = msg->hdr.req_id;
-    resp_msg.hdr.seq_num = 1;
-    resp_msg.hdr.num_pks = 2;
+    resp_msg.hdr.num_pks = 10;
     resp_msg.hdr.msg_type = 1;  // GATHER Msg
     resp_msg.hdr.body_len = sizeof(uint32_t);
     
     uint32_t res = htonl(worker_port);
     memmove(resp_msg.body, &res, resp_msg.hdr.body_len);
-    if (sendto(sock, &resp_msg, sizeof(sg_msg_t), 0, (struct sockaddr *)&client, clientSize) < 0) {
-        perror("sendto()");
-        exit(2);
-    }
 
-    resp_msg.hdr.seq_num = 2;
-    if (sendto(sock, &resp_msg, sizeof(sg_msg_t), 0, (struct sockaddr *)&client, clientSize) < 0) {
-        perror("sendto()");
-        exit(2);
+    for (int i = 1; i <= 10; i++) {
+      resp_msg.hdr.seq_num = i;
+      if (sendto(sock, &resp_msg, sizeof(sg_msg_t), 0, (struct sockaddr *)&client, clientSize) < 0) {
+          perror("sendto()");
+          exit(2);
+      }
+      printf("sent pack %d\n", resp_msg.hdr.seq_num);
     }
-    
-    printf("Sending port back twice in 2 packets\n");
-
   }
 
   close(sock);

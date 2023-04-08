@@ -352,10 +352,6 @@ int main(int argc, char** argv) {
                     std::cout << "got response from worker socket: " << ntohl(*(uint32_t*)resp->body) 
                               << " with seq num = " << resp->hdr.seq_num << std::endl;
                 
-                    // TODO merge logic for single and multi-packet processing
-                    // careful with indexing and resize
-                    // (ie: make data structures for MP processing generic for single-packets)
-
                     // check for multi-packet message
                     if (expectedPacketsPerMsg != resp->hdr.num_pks && resp->hdr.num_pks > 1) {
                         expectedPacketsPerMsg = resp->hdr.num_pks;
@@ -366,7 +362,7 @@ int main(int argc, char** argv) {
                     }
 
                     if (resp->hdr.seq_num <= resp->hdr.num_pks) {
-                        multiPacketMessages[conn_i.fd][std::max(static_cast<int>(resp->hdr.seq_num - 1), 0)] = std::move(data);
+                        multiPacketMessages[conn_i.fd][std::max(static_cast<int>(resp->hdr.seq_num) - 1, 0)] = std::move(data);
                         multiPacketMessagesCount[conn_i.fd]++;
                     }
 

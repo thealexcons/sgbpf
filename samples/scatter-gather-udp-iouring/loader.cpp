@@ -311,7 +311,10 @@ int main(int argc, char** argv) {
 
     std::unordered_map<int, std::vector<RESP_AGGREGATION_TYPE>> multiPacketMessages;
     std::unordered_map<int, uint32_t> multiPacketMessagesCount;
-    unsigned packetsPerMsgExpected = 1;
+
+    unsigned expectedPacketsPerMsg = 1;
+    for (auto wfd : workerFds)
+        multiPacketMessages[wfd].resize(expectedPacketsPerMsg);    
 
     while (1) {
         std::cout << "entering event loop\n";       
@@ -341,9 +344,8 @@ int main(int argc, char** argv) {
                     close(conn_i.fd);
                 } else {
                     
-                    processedWorkerFds.push_back(conn_i.fd);
+                    // processedWorkerFds.push_back(conn_i.fd);
                     auto resp = (sg_msg_t*) bufs[buff_id];
-
 
                     auto data = ntohl(*(uint32_t*) resp->body);
                     userspace_aggregated_value += data;
@@ -355,16 +357,16 @@ int main(int argc, char** argv) {
                     // (ie: make data structures for MP processing generic for single-packets)
 
                     // check for multi-packet message
-                    if (packetsPerMsgExpected != resp->hdr.num_pks && resp->hdr.num_pks > 1) {
-                        packetsPerMsgExpected = resp->hdr.num_pks;
+                    if (expectedPacketsPerMsg != resp->hdr.num_pks && resp->hdr.num_pks > 1) {
+                        expectedPacketsPerMsg = resp->hdr.num_pks;
 
                         // reserve slots for each packet body
                         for (auto wfd : workerFds)
                             multiPacketMessages[wfd].resize(resp->hdr.num_pks);                        
                     }
 
-                    if (resp->hdr.num_pks > 1 && resp->hdr.seq_num > 0 && resp->hdr.seq_num <= resp->hdr.num_pks) {
-                        multiPacketMessages[conn_i.fd][resp->hdr.seq_num - 1] = std::move(data);
+                    if (resp->hdr.seq_num <= resp->hdr.num_pks) {
+                        multiPacketMessages[conn_i.fd][std::max(static_cast<int>(resp->hdr.seq_num - 1), 0)] = std::move(data);
                         multiPacketMessagesCount[conn_i.fd]++;
                     }
 
@@ -420,33 +422,23 @@ int main(int argc, char** argv) {
 
         int remaining = 0;
 
-        if (packetsPerMsgExpected == 1) {
-            // Have we read all the individual responses from the worker sockets?
-            std::sort(processedWorkerFds.begin(), processedWorkerFds.end());
-            if (processedWorkerFds == workerFds) {
-                std::cout << "Aggregated value in user-space = " << userspace_aggregated_value << std::endl;
-                break;
+        // Check for completion
+        for (const auto& [wfd, pks] : multiPacketMessagesCount) {
+            auto pksRemainingForThisWorker = abs(expectedPacketsPerMsg - pks);
+            if (pksRemainingForThisWorker > 0) {
+                remaining += pksRemainingForThisWorker;
+
+                // Add the remaining socket read operations to the SQ
+                for (auto i = 0; i < pksRemainingForThisWorker; i++)
+                    add_socket_read(&ring, wfd, GROUP_ID, MAX_MESSAGE_LEN, IOSQE_BUFFER_SELECT);
             }
         }
-        else    // check for multi-packet completion
-        {
-            for (const auto& [wfd, pks] : multiPacketMessagesCount) {
-                auto pksRemainingForThisWorker = abs(packetsPerMsgExpected - pks);
-                if (pksRemainingForThisWorker > 0) {
-                    remaining += pksRemainingForThisWorker;
 
-                    // Add the remaining socket read operations to the SQ
-                    for (auto i = 0; i < pksRemainingForThisWorker; i++)
-                        add_socket_read(&ring, wfd, GROUP_ID, MAX_MESSAGE_LEN, IOSQE_BUFFER_SELECT);
-                }
-            }
+        std::cout << "Remaining packets: " << remaining << std::endl;
 
-            std::cout << "Remaining packets: " << remaining << std::endl;
-
-            if (!remaining) {
-                std::cout << "Aggregated (multi-packet) value in user-space = " << userspace_aggregated_value << std::endl;
-                break;
-            }
+        if (!remaining) {
+            std::cout << "Aggregated (multi-packet) value in user-space = " << userspace_aggregated_value << std::endl;
+            break;
         }
 
         io_uring_cq_advance(&ring, count);

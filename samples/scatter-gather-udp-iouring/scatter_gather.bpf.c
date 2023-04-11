@@ -265,6 +265,29 @@ int gather_prog(struct xdp_md* ctx) {
 
     // Single-packet response aggregation:
 
+#ifdef VECTOR_RESPONSE
+    RESP_VECTOR_TYPE* resp = resp_msg->body;
+
+    RESP_VECTOR_TYPE* agg_resp = bpf_map_lookup_elem(&map_aggregated_response, &ZERO_IDX);
+    if (!agg_resp)
+        return XDP_ABORTED;
+
+    bpf_printk("------ PROCESSING VECTOR FROM WORKER %d", bpf_ntohs(worker.worker_port));
+
+    // how to update the array element??
+
+    // this is the only way to update the map element (create new result buffer)
+    // but this imposes a stack limit of 512 bytes, which restricts the effective body length of the packet
+    RESP_VECTOR_TYPE updated_resp[RESP_MAX_VECTOR_SIZE];
+    for (__u32 i = 0; i < RESP_MAX_VECTOR_SIZE; ++i) {
+        bpf_printk("Old agg_resp[%d] = %d  new = %d", i,  agg_resp[i], agg_resp[i] + resp[i]);
+        updated_resp[i] = agg_resp[i] + resp[i];
+    }
+    bpf_map_update_elem(&map_aggregated_response, &ZERO_IDX, &updated_resp, 0);
+    // either way this does not seem to work,,,, not saving correctly
+    // TODO ask marios about this!!!!!!1
+
+#else
     // Get the int the worker responded with
     __u32 resp = bpf_ntohl(*((__u32 *) resp_msg->body));
     bpf_printk("Got packet with payload = %d for req ID = %d and seq num = %d", resp, resp_msg->hdr.req_id, resp_msg->hdr.seq_num);
@@ -274,9 +297,10 @@ int gather_prog(struct xdp_md* ctx) {
     if (!agg_resp)
         return XDP_ABORTED;
 
-
     const __u32 updated_resp = *agg_resp + resp;
     bpf_map_update_elem(&map_aggregated_response, &ZERO_IDX, &updated_resp, 0);
+
+#endif
 
     // Flag that this worker is completed
     // worker_resp_status_t updated_status = RECEIVED_RESPONSE; // cannot recycle pointers returned by map lookups!
@@ -288,7 +312,7 @@ int gather_prog(struct xdp_md* ctx) {
     return XDP_PASS;
 }
 
-
+/*
 SEC("tc")
 int notify_gather_ctrl_prog(struct __sk_buff* skb) {
 	void* data = (void *)(long)skb->data;
@@ -357,6 +381,8 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
 
     return TC_ACT_OK;
 }
+
+*/
 
 
 char LICENSE[] SEC("license") = "GPL";

@@ -4,12 +4,11 @@
 #include <linux/ip.h>
 #include <linux/udp.h>
 #include <linux/tcp.h>
-
+// #include <stddef.h>
 // Defines common constants and structures between eBPF and user-space programs
 
 #define MTU_SIZE 1500
 #define MAX_SOCKETS_ALLOWED 1024
-#define RESP_AGGREGATION_TYPE unsigned int
 
 
 typedef enum worker_resp_status
@@ -43,7 +42,18 @@ typedef struct __attribute__((packed)) {
     char body[MTU_SIZE - sizeof(struct iphdr) - sizeof(struct udphdr) - sizeof(struct sg_msg_hdr)];
 } sg_msg_t;
 
-#define BODY_LEN (sizeof(sg_msg_t) - offsetof(sg_msg_t, body))
+#define BODY_LEN (sizeof(sg_msg_t) - __builtin_offsetof(sg_msg_t, body))
+
+#define VECTOR_RESPONSE 1
+
+#ifdef VECTOR_RESPONSE
+#define RESP_VECTOR_TYPE uint32_t
+#define RESP_MAX_VECTOR_SIZE 120    // to avoid stack limit issues in eBPF
+// #define RESP_MAX_VECTOR_SIZE (BODY_LEN / sizeof(RESP_VECTOR_TYPE))
+#define RESP_AGGREGATION_TYPE RESP_VECTOR_TYPE[RESP_MAX_VECTOR_SIZE]
+#else
+#define RESP_AGGREGATION_TYPE unsigned int
+#endif
 
 typedef enum msg_type 
 {

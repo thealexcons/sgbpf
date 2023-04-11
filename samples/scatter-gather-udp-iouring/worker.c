@@ -72,23 +72,41 @@ int main(int argc, char *argv[]) {
     // TODO the port should be the corresponding port on the coordinator dedicated to this worker
 
     // Assume writes and reads are full (no partial processing)
+    // sg_msg_t resp_msg;
+    // memset(&resp_msg, 0, sizeof(resp_msg));
+    // resp_msg.hdr.req_id = msg->hdr.req_id;
+    // resp_msg.hdr.num_pks = 10;
+    // resp_msg.hdr.msg_type = 1;  // GATHER Msg
+    // resp_msg.hdr.body_len = sizeof(uint32_t);
+    
+    // uint32_t res = htonl(worker_port);
+    // memmove(resp_msg.body, &res, resp_msg.hdr.body_len);
+
+    // for (int i = 1; i <= 10; i++) {
+    //   resp_msg.hdr.seq_num = i;
+    //   if (sendto(sock, &resp_msg, sizeof(sg_msg_t), 0, (struct sockaddr *)&client, clientSize) < 0) {
+    //       perror("sendto()");
+    //       exit(2);
+    //   }
+    //   printf("sent pack %d\n", resp_msg.hdr.seq_num);
+    // }
+
+
+    // Vector example: send vector of increasing numbers
     sg_msg_t resp_msg;
     memset(&resp_msg, 0, sizeof(resp_msg));
     resp_msg.hdr.req_id = msg->hdr.req_id;
-    resp_msg.hdr.num_pks = 10;
     resp_msg.hdr.msg_type = 1;  // GATHER Msg
-    resp_msg.hdr.body_len = sizeof(uint32_t);
+    resp_msg.hdr.body_len = sizeof(uint32_t) * RESP_MAX_VECTOR_SIZE;
     
-    uint32_t res = htonl(worker_port);
-    memmove(resp_msg.body, &res, resp_msg.hdr.body_len);
-
-    for (int i = 1; i <= 10; i++) {
-      resp_msg.hdr.seq_num = i;
-      if (sendto(sock, &resp_msg, sizeof(sg_msg_t), 0, (struct sockaddr *)&client, clientSize) < 0) {
-          perror("sendto()");
-          exit(2);
-      }
-      printf("sent pack %d\n", resp_msg.hdr.seq_num);
+    uint32_t vec[RESP_MAX_VECTOR_SIZE];
+    for (int i = 0; i < RESP_MAX_VECTOR_SIZE; i++)
+      vec[i] = i + 1;
+      
+    memmove(resp_msg.body, vec, resp_msg.hdr.body_len);
+    if (sendto(sock, &resp_msg, sizeof(sg_msg_t), 0, (struct sockaddr *)&client, clientSize) < 0) {
+        perror("sendto()");
+        exit(2);
     }
   }
 

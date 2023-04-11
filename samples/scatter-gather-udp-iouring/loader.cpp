@@ -306,10 +306,10 @@ int main(int argc, char** argv) {
     // Submit and wait for completion (alternatively, omit _and_wait() for busy wait polling)
     // Also, see kernel thread polling mode to avoid any syscalls at all (but has high CPU usage)
 
-    RESP_AGGREGATION_TYPE userspace_aggregated_value = 0;
+    // RESP_AGGREGATION_TYPE userspace_aggregated_value = 0;
     std::vector<int> processedWorkerFds;
 
-    std::unordered_map<int, std::vector<RESP_AGGREGATION_TYPE>> multiPacketMessages;
+    std::unordered_map<int, std::vector<std::array<RESP_VECTOR_TYPE, RESP_MAX_VECTOR_SIZE>>> multiPacketMessages;
     std::unordered_map<int, uint32_t> multiPacketMessagesCount;
 
     unsigned expectedPacketsPerMsg = 1;
@@ -347,10 +347,13 @@ int main(int argc, char** argv) {
                     // processedWorkerFds.push_back(conn_i.fd);
                     auto resp = (sg_msg_t*) bufs[buff_id];
 
-                    auto data = ntohl(*(uint32_t*) resp->body);
-                    userspace_aggregated_value += data;
-                    std::cout << "got response from worker socket: " << ntohl(*(uint32_t*)resp->body) 
-                              << " with seq num = " << resp->hdr.seq_num << std::endl;
+                    // Scalar aggregation:
+                    // auto data = ntohl(*(uint32_t*) resp->body);
+                    // userspace_aggregated_value += data;
+                    // std::cout << "got response from worker socket: " << data << " with seq num = " << resp->hdr.seq_num << std::endl;
+
+                    // Vectorised aggregation:
+                    auto data = (uint32_t*) resp->body;
                 
                     // check for multi-packet message
                     if (expectedPacketsPerMsg != resp->hdr.num_pks && resp->hdr.num_pks > 1) {
@@ -362,7 +365,7 @@ int main(int argc, char** argv) {
                     }
 
                     if (resp->hdr.seq_num <= resp->hdr.num_pks) {
-                        multiPacketMessages[conn_i.fd][std::max(static_cast<int>(resp->hdr.seq_num) - 1, 0)] = std::move(data);
+                        // multiPacketMessages[conn_i.fd][std::max(static_cast<int>(resp->hdr.seq_num) - 1, 0)] = std::move(data);
                         multiPacketMessagesCount[conn_i.fd]++;
                     }
 
@@ -433,7 +436,7 @@ int main(int argc, char** argv) {
         std::cout << "Remaining packets: " << remaining << std::endl;
 
         if (!remaining) {
-            std::cout << "Aggregated (multi-packet) value in user-space = " << userspace_aggregated_value << std::endl;
+            // std::cout << "Aggregated (multi-packet) value in user-space = " << userspace_aggregated_value << std::endl;
             break;
         }
 
@@ -486,10 +489,13 @@ int main(int argc, char** argv) {
  
     // Get the aggregated value
     auto aggregatedValueMap = obj.findMapByName("map_aggregated_response").value();
-    RESP_AGGREGATION_TYPE value;
+    RESP_VECTOR_TYPE* value;
     aggregatedValueMap.find(&zero, &value);
 
-    std::cout << "Final aggregated value (from BPF map) = " << value << std::endl;
+    std::cout << "Final aggregated value (from BPF map) = " << std::endl;
+    for (auto i = 0u; i < RESP_MAX_VECTOR_SIZE; i++) {
+        std::cout << value[i] << std::endl;
+    }
 
     close(skfd);
 

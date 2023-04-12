@@ -492,7 +492,7 @@ int main(int argc, char** argv) {
     RESP_VECTOR_TYPE* value;
     aggregatedValueMap.find(&zero, &value);
 
-    std::cout << "Final aggregated value (from BPF map) = " << std::endl;
+    std::cout << "Final aggregated vector (from BPF map) = " << std::endl;
     for (auto i = 0u; i < RESP_MAX_VECTOR_SIZE; i++) {
         std::cout << value[i] << std::endl;
     }

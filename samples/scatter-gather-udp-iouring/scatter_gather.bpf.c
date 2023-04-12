@@ -274,18 +274,13 @@ int gather_prog(struct xdp_md* ctx) {
 
     bpf_printk("------ PROCESSING VECTOR FROM WORKER %d", bpf_ntohs(worker.worker_port));
 
-    // how to update the array element??
-
     // this is the only way to update the map element (create new result buffer)
     // but this imposes a stack limit of 512 bytes, which restricts the effective body length of the packet
     RESP_VECTOR_TYPE updated_resp[RESP_MAX_VECTOR_SIZE];
     for (__u32 i = 0; i < RESP_MAX_VECTOR_SIZE; ++i) {
-        bpf_printk("Old agg_resp[%d] = %d  new = %d", i,  agg_resp[i], agg_resp[i] + resp[i]);
         updated_resp[i] = agg_resp[i] + resp[i];
     }
     bpf_map_update_elem(&map_aggregated_response, &ZERO_IDX, &updated_resp, 0);
-    // either way this does not seem to work,,,, not saving correctly
-    // TODO ask marios about this!!!!!!1
 
 #else
     // Get the int the worker responded with

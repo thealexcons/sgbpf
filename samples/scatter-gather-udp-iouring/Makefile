@@ -29,7 +29,7 @@ $(LOADER): loader.cpp
 
 
 $(SG_LOADER): sg_loader.cpp
-	g++ -fsanitize=address -std=c++17 -I$(LIBEBPFPP_HEADERS) -I$(LIBBPF_HEADERS) -L$(LIBEBPFPP_LIB_DIR) -L$(LIBBPF_LIB_DIR) -g -Wall $^ -o $@ -lbpf -lebpfpp
+	g++ -fsanitize=address -std=c++17 -I$(LIBEBPFPP_HEADERS) -I$(LIBBPF_HEADERS) -L$(LIBEBPFPP_LIB_DIR) -L$(LIBBPF_LIB_DIR) -g -Wall $^ -o $@ -lbpf -lebpfpp -luring
 
 
 $(BPF_PROG): scatter_gather.bpf.c

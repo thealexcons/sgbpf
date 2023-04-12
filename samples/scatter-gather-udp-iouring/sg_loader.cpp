@@ -1,4 +1,6 @@
 #include <vector>
+#include <chrono>
+#include <unordered_map>
 #include <stdexcept>
 #include <iostream>
 #include <fstream>
@@ -10,12 +12,14 @@
 #include <arpa/inet.h>
 #include <net/if.h>
 #include <unistd.h>
-
+#include <liburing.h>
 
 #include "ebpfpp/Program.h"
 #include "ebpfpp/Map.h"
 #include "ebpfpp/Object.h"
 #include "ebpfpp/Util.h"
+
+#include "common.h"
 
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
@@ -213,6 +217,66 @@ void ScatterGatherContext::setWorkers(const std::vector<Worker>& workers)
     }
 }
 
+struct IOUringContext 
+{
+    constexpr static const auto NumBuffers    = 1024;
+    constexpr static const auto MaxBufferSize = sizeof(sg_msg_t);
+    constexpr static const auto BufferGroupID = 1337;   // why this? probably arbitrary
+
+    io_uring ring;
+    char buffers[NumBuffers][MaxBufferSize] = {0};
+
+    IOUringContext(uint32_t numEntries) 
+    {
+        // Initialise io_uring
+        io_uring_params params;
+        memset(&params, 0, sizeof(params));
+        if (io_uring_queue_init_params(numEntries, &ring, &params) < 0)
+            throw std::runtime_error{"Failed to initialise io_uring queue"}; 
+
+        // Register packet buffers for buffer selection 
+        io_uring_sqe* sqe = io_uring_get_sqe(&ring);
+        io_uring_prep_provide_buffers(sqe, buffers, MaxBufferSize, NumBuffers, BufferGroupID, 0);
+        io_uring_submit(&ring);
+        
+        io_uring_cqe* cqe;
+        io_uring_wait_cqe(&ring, &cqe);
+        if (cqe->res < 0)
+            throw std::runtime_error{"Failed to provide buffers during io_uring setup"};
+        io_uring_cqe_seen(&ring, cqe);
+    }
+};
+
+/////////////////////////////
+///  ScatterGatherRequest  // 
+/////////////////////////////
+
+class ScatterGatherRequest
+{
+    // Manages the state and execution of a scatter gather request. Each invocation
+    // of the scatter gather primitive creates an instance of this class.
+
+private:
+    // DATA MEMBERS
+    int d_requestID;                    // The unique request ID
+    int d_expectedPacketsPerMessage;    // The number of expected packets per response message
+    int d_remainingPackets;             // The number of remaining packets to be read 
+    
+    std::unordered_map<int, uint32_t>           d_workerPacketCount;    // The number of packets received for each worker
+    std::unordered_map<int, std::vector<char*>> d_workerPacketBuffers;  // The packet buffers received for each worker
+
+public:
+    
+    // Maybe pass in an io_uring context into the request?? might be more flexible
+    // then creating one on every request
+
+    ScatterGatherRequest(IOUringContext* io, int requestID) {};
+
+    void start() {};
+
+    bool hasFinished() { return false; };
+
+};
 
 
 /////////////////////////////
@@ -243,6 +307,22 @@ private:
 
     const uint16_t PORT = 9223;    // just generate and add to map
 
+    static uint32_t s_nextRequestID;
+
+    // IO uring
+    IOUringContext d_ioCtx;
+
+    enum {
+        IO_READ,
+        IO_WRITE,
+    };
+
+    typedef struct conn_info {
+        __u32 fd;
+        __u16 type;
+        __u16 bid;
+    } conn_info;
+
 public:
 
     explicit ScatterGatherUDP(ScatterGatherContext& ctx);
@@ -252,27 +332,39 @@ public:
     bool scatter(const char* msg, size_t len);
     bool scatter(const std::string& msg);
 
-    template <typename RESULT, GatherCompletionPolicy POLICY = GatherCompletionPolicy::WaitAll>
+    template <typename RESULT, 
+              typename TIMEOUT_UNITS = std::chrono::microseconds,
+              GatherCompletionPolicy POLICY = GatherCompletionPolicy::WaitAll>
     void gather(RESULT* result,
+                TIMEOUT_UNITS timeout = {},
                 GatherArgs gatherArgs = {});
+
+    // Where to put the event loop? inside gather or a start() function?
 
 private:
 
-    template <typename RESULT>
-    void gatherWaitAll(RESULT* result);
+    template <typename RESULT, typename TIMEOUT_UNITS>
+    void gatherWaitAll(RESULT* result, TIMEOUT_UNITS timeout);
     
-    template <typename RESULT>
-    void gatherWaitAny(RESULT* result) { std::cout << "gatherWaitAny()\n"; }
+    template <typename RESULT, typename TIMEOUT_UNITS>
+    void gatherWaitAny(RESULT* result, TIMEOUT_UNITS timeout) { std::cout << "gatherWaitAny()\n"; }
 
-    template <typename RESULT>
-    void gatherWaitN(RESULT* result, uint32_t n) { std::cout << "gatherWaitN()\n"; }
+    template <typename RESULT, typename TIMEOUT_UNITS>
+    void gatherWaitN(RESULT* result, TIMEOUT_UNITS timeout, uint32_t n) { std::cout << "gatherWaitN()\n"; }
 
+
+    // IO Uring helpers
+    void addScatterSend(io_uring* ring, int skfd, sockaddr_in* servAddr, sg_msg_t* scatterMsg);
+    void addSocketRead(io_uring* ring, int fd, unsigned groupID, size_t msgLen, unsigned flags);
 };
 
+uint32_t ScatterGatherUDP::s_nextRequestID = 0;
 
 ScatterGatherUDP::ScatterGatherUDP(ScatterGatherContext& ctx) 
     : d_ctx{ctx}
+    , d_ioCtx{2048}
 {
+
     // Configure the scatter socket for sending
     d_scatterSkFd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);  
     if (d_scatterSkFd < 0)
@@ -303,10 +395,12 @@ ScatterGatherUDP::ScatterGatherUDP(ScatterGatherContext& ctx)
         if (wfd < 0)
             throw std::runtime_error{"Failed socket() on a worker socket"};
 
-        d_workerSkFds.push_back(wfd);
+        d_workerSkFds.push_back(wfd); // TODO USE WORKERS OBJECTS
 
         // TODO any further setup
     }
+
+    //////////// TODO review previous setup code //////////////////////
 }
 
 ScatterGatherUDP::~ScatterGatherUDP()
@@ -322,33 +416,48 @@ ScatterGatherUDP::~ScatterGatherUDP()
 
 bool ScatterGatherUDP::scatter(const char* msg, size_t len)
 {
-    // Send the dummy scatter message to itself
-    return sendto(d_scatterSkFd, msg, len, 0, (const struct sockaddr *)&d_scatterSkAddr, sizeof(sockaddr_in)) != -1;
+    sg_msg_t scatter_msg;
+    memset(&scatter_msg, 0, sizeof(sg_msg_t));
+
+    scatter_msg.hdr.req_id = ++s_nextRequestID;
+    scatter_msg.hdr.msg_type = SCATTER_MSG;
+    scatter_msg.hdr.body_len = std::min(len, BODY_LEN);
+    strncpy(scatter_msg.body, msg, scatter_msg.hdr.body_len);
+
+    // Add the send operation to write the scatter request into the socket
+    addScatterSend(&d_ioCtx.ring, d_scatterSkFd, &d_scatterSkAddr, &scatter_msg);
+
+    // Add all the socket read operations for each worker
+    // ... TODO
+
+    // Submit all IO requests to the queue and wait
+    // NOTE: if we reuse the same ring for multiple requests, this number may be
+    // inaccurate because it may mix operatioms from different requests
+    io_uring_submit_and_wait(&d_ioCtx.ring, d_workerSkFds.size() + 1); // TODO USE WORKERS OBJECTS
 }
 
 bool ScatterGatherUDP::scatter(const std::string& msg)
 {
-    // Send the dummy scatter message to itself
     auto len = strnlen(msg.c_str(), msg.size() + 1);
-    return sendto(d_scatterSkFd, msg.c_str(), len, 0, (const struct sockaddr *)&d_scatterSkAddr, sizeof(sockaddr_in)) != -1;
+    scatter(msg.c_str(), len);
 }
 
-
-template <typename RESULT, GatherCompletionPolicy POLICY>
+template <typename RESULT, typename TIMEOUT_UNITS, GatherCompletionPolicy POLICY>
 void ScatterGatherUDP::gather(RESULT* result,
+                              TIMEOUT_UNITS timeout,
                               GatherArgs gatherArgs)
 {
     if constexpr(POLICY == GatherCompletionPolicy::WaitAll)
-        return gatherWaitAll(result);
+        return gatherWaitAll(result, timeout);
     else if constexpr(POLICY == GatherCompletionPolicy::WaitAny)
-        return gatherWaitAny(result);
+        return gatherWaitAny(result, timeout);
     else
-        return gatherWaitN(result, gatherArgs.nodesToWait);
+        return gatherWaitN(result, timeout, gatherArgs.nodesToWait);
 }
 
 
-template <typename RESULT>
-void ScatterGatherUDP::gatherWaitAll(RESULT* result)
+template <typename RESULT, typename TIMEOUT_UNITS>
+void ScatterGatherUDP::gatherWaitAll(RESULT* result, TIMEOUT_UNITS timeout)
 {
     // TODO use epoll or other async IO
 
@@ -374,7 +483,49 @@ void ScatterGatherUDP::gatherWaitAll(RESULT* result)
 
 }
 
+void ScatterGatherUDP::addScatterSend(io_uring* ring, int skfd, sockaddr_in* servAddr, sg_msg_t* scatterMsg)
+{
+    struct iovec iov = {
+		.iov_base = scatterMsg,
+		.iov_len = sizeof(sg_msg_t),
+	};
 
+	struct msghdr msgh;
+    memset(&msgh, 0, sizeof(msgh));
+	msgh.msg_name = servAddr;
+	msgh.msg_namelen = sizeof(sockaddr_in);
+	msgh.msg_iov = &iov;
+	msgh.msg_iovlen = 1;
+
+    io_uring_sqe *sqe = io_uring_get_sqe(ring);
+    io_uring_prep_sendmsg(sqe, skfd, &msgh, 0); // TODO look into sendmsg_zc (zero-copy)
+    io_uring_sqe_set_flags(sqe, 0);
+
+    conn_info conn_i = {
+        .fd = skfd,
+        .type = IO_WRITE,
+    };
+    memcpy(&sqe->user_data, &conn_i, sizeof(conn_i));
+}
+
+void ScatterGatherUDP::addSocketRead(io_uring* ring, int fd, unsigned groupID, size_t msgLen, unsigned flags)
+{
+    io_uring_sqe *sqe = io_uring_get_sqe(ring);
+    io_uring_prep_recv(sqe, fd, NULL, msgLen, MSG_WAITALL); // wait for all fragments to arrive
+    io_uring_sqe_set_flags(sqe, flags);
+    sqe->buf_group = groupID;
+
+    conn_info conn_i = {
+        .fd = fd,
+        .type = IO_READ,
+    };
+    memcpy(&sqe->user_data, &conn_i, sizeof(conn_i));
+}
+
+
+/////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////
 
 int main(int argc, char** argv) {
 

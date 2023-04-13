@@ -168,6 +168,8 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    const uint32_t zero = 0;
+
     // Read the worker destinations
     auto workerDestinations = readWorkerDestinations("workers.cfg");
     
@@ -190,13 +192,18 @@ int main(int argc, char** argv) {
 
     auto gatherXdpProg = obj.findProgramByName("gather_prog").value();
     auto gatherProgHookHandle = ebpf::XDPHook::attach(ifindex, gatherXdpProg);
+
+    // Load the vector aggregation program and populate the program map for tail calls
+    auto vecAggProgsMap = obj.findMapByName("map_vector_aggregation_progs").value();
+    auto vecAggProgFd = obj.findProgramByName("vector_aggregation_prog").value().fd();
+    auto progIdx = VECTOR_AGGREGATION_PROG_IDX;
+    vecAggProgsMap.update(&progIdx, &vecAggProgFd);
     
     ////////////////////////////////////////////////////////////////////////////////////////
 
 
     // Register the application's outgoing port
     auto applicationPortMap = obj.findMapByName("map_application_port").value();
-    const uint32_t zero = 0;
     const auto portNetBytes = htons(PORT);
     applicationPortMap.update(&zero, &portNetBytes);
 

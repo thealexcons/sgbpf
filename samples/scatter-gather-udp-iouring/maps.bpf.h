@@ -10,6 +10,31 @@
 //       eBPF Maps        //
 // ---------------------- //
 
+// Stores the different parts of the aggregation logic for vector data
+struct {
+    __uint(type, BPF_MAP_TYPE_PROG_ARRAY);
+    __type(key, __u32);
+    __type(value, __u32);
+    __uint(max_entries, 1);
+} map_vector_aggregation_progs SEC(".maps");
+
+// Stores the pointer to the current portion of the packet body being aggregated
+struct {
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+    __type(key, __u32);
+    __type(value, char*);
+    __uint(max_entries, 1);
+} map_packet_body_context SEC(".maps");
+
+// Stores the number of times the vector aggregation program has been called for the packet
+struct {
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+    __type(key, __u32);
+    __type(value, __u32);
+    __uint(max_entries, 1);
+} map_vector_aggregation_chunk_idx SEC(".maps");
+
+
 // Stores the application outgoing port (for scattering)
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
@@ -56,8 +81,8 @@ struct {
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __type(key, __u32);
-    __type(value, RESP_AGGREGATION_TYPE);    // TODO Investigate how to make this generic...
-    __uint(max_entries, 1);
+    __type(value, RESP_VECTOR_TYPE[VECTOR_AGGREGATION_CHUNK]);    // TODO Investigate how to make this generic...
+    __uint(max_entries, RESP_MAX_VECTOR_SIZE / VECTOR_AGGREGATION_CHUNK + 1);
 } map_aggregated_response SEC(".maps");
 
 // look into making RESP_AGGREGATION_TYPE an array of fixed size?

@@ -266,21 +266,11 @@ int gather_prog(struct xdp_md* ctx) {
     // Single-packet response aggregation:
 
 #ifdef VECTOR_RESPONSE
-    RESP_VECTOR_TYPE* resp = resp_msg->body;
-
-    RESP_VECTOR_TYPE* agg_resp = bpf_map_lookup_elem(&map_aggregated_response, &ZERO_IDX);
-    if (!agg_resp)
-        return XDP_ABORTED;
-
-    bpf_printk("------ PROCESSING VECTOR FROM WORKER %d", bpf_ntohs(worker.worker_port));
-
-    // this is the only way to update the map element (create new result buffer)
-    // but this imposes a stack limit of 512 bytes, which restricts the effective body length of the packet
-    RESP_VECTOR_TYPE updated_resp[RESP_MAX_VECTOR_SIZE];
-    for (__u32 i = 0; i < RESP_MAX_VECTOR_SIZE; ++i) {
-        updated_resp[i] = agg_resp[i] + resp[i];
-    }
-    bpf_map_update_elem(&map_aggregated_response, &ZERO_IDX, &updated_resp, 0);
+    bpf_map_update_elem(&map_vector_aggregation_chunk_idx, &ZERO_IDX, &ZERO_IDX, 0);
+    // Save the pointer to the packet body
+    bpf_map_update_elem(&map_packet_body_context, &ZERO_IDX, &resp_msg->body, BPF_F_CURRENT_CPU);
+    // Perform the vector aggregation logic in a new stack frame
+    bpf_tail_call(ctx, &map_vector_aggregation_progs, VECTOR_AGGREGATION_PROG_IDX);
 
 #else
     // Get the int the worker responded with
@@ -306,6 +296,58 @@ int gather_prog(struct xdp_md* ctx) {
 
     return XDP_PASS;
 }
+
+
+SEC("xdp")
+int vector_aggregation_prog(struct xdp_md* ctx) {
+#ifdef VECTOR_RESPONSE
+    __u32* chunk_idx_ptr = bpf_map_lookup_elem(&map_vector_aggregation_chunk_idx, &ZERO_IDX);
+    if (!chunk_idx_ptr)
+        return XDP_ABORTED;
+
+    __u32 chunk_idx = *chunk_idx_ptr;
+    
+    RESP_VECTOR_TYPE* resp = bpf_map_lookup_elem(&map_packet_body_context, &ZERO_IDX);
+    if (!resp)
+        return XDP_ABORTED;
+
+    RESP_VECTOR_TYPE* agg_resp = bpf_map_lookup_elem(&map_aggregated_response, &chunk_idx);
+    if (!agg_resp)
+        return XDP_ABORTED;
+
+    // bpf_printk("------ PROCESSING VECTOR CHUNK elements from %d to %d", *chunk_idx * VECTOR_AGGREGATION_CHUNK, (*chunk_idx+1) * VECTOR_AGGREGATION_CHUNK);
+
+#define MIN(a,b) ((a) < (b) ? (a) : (b))
+
+    // this is the only way to update the map element (create new result buffer)
+    // but this imposes a stack limit of 512 bytes, which restricts the effective body length of the packet
+    RESP_VECTOR_TYPE updated_resp[VECTOR_AGGREGATION_CHUNK];
+    __u32 chunk_size = MIN(RESP_MAX_VECTOR_SIZE - (chunk_idx * VECTOR_AGGREGATION_CHUNK), VECTOR_AGGREGATION_CHUNK);
+    for (__u32 i = 0; i < chunk_size; ++i) {
+        updated_resp[i] = agg_resp[i] + resp[i];
+    }
+    // TODO fix indexing issues...
+    // VECTOR_AGGREGATION_CHUNK = 124 elements
+
+    bpf_map_update_elem(&map_aggregated_response, &chunk_idx, &updated_resp, 0);
+
+    chunk_idx++;
+    // Update the chunk index (or stop if done)
+    if (chunk_idx * VECTOR_AGGREGATION_CHUNK >= RESP_MAX_VECTOR_SIZE)
+        return XDP_PASS;
+
+    bpf_map_update_elem(&map_vector_aggregation_chunk_idx, &ZERO_IDX, &chunk_idx, 0);
+
+    // Move the body pointer forward
+    bpf_map_update_elem(&map_packet_body_context, &ZERO_IDX, resp + VECTOR_AGGREGATION_CHUNK, 0);
+
+    // Repeat with remaining elements
+    bpf_tail_call(ctx, &map_vector_aggregation_progs, VECTOR_AGGREGATION_PROG_IDX);
+
+#endif
+    return XDP_PASS;
+}
+
 
 /*
 SEC("tc")

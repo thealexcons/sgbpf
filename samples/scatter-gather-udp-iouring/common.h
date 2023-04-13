@@ -48,9 +48,15 @@ typedef struct __attribute__((packed)) {
 
 #ifdef VECTOR_RESPONSE
 #define RESP_VECTOR_TYPE uint32_t
-#define RESP_MAX_VECTOR_SIZE 120    // to avoid stack limit issues in eBPF
-// #define RESP_MAX_VECTOR_SIZE (BODY_LEN / sizeof(RESP_VECTOR_TYPE))
+// #define RESP_MAX_VECTOR_SIZE 120    // to avoid stack limit issues in eBPF
+#define RESP_MAX_VECTOR_SIZE (BODY_LEN / sizeof(RESP_VECTOR_TYPE))      // 363 4-byte elements
 #define RESP_AGGREGATION_TYPE RESP_VECTOR_TYPE[RESP_MAX_VECTOR_SIZE]
+
+#define EBPF_MAX_STACK_SIZE 512
+#define VECTOR_AGGREGATION_CHUNK (EBPF_MAX_STACK_SIZE / sizeof(RESP_VECTOR_TYPE) - 4)
+
+#define VECTOR_AGGREGATION_PROG_IDX 0
+
 #else
 #define RESP_AGGREGATION_TYPE unsigned int
 #endif

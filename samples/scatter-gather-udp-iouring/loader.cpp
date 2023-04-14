@@ -199,6 +199,10 @@ int main(int argc, char** argv) {
     auto progIdx = VECTOR_AGGREGATION_PROG_IDX;
     vecAggProgsMap.update(&progIdx, &vecAggProgFd);
     
+    vecAggProgFd = obj.findProgramByName("post_vector_aggregation_prog").value().fd();
+    progIdx = 1;
+    vecAggProgsMap.update(&progIdx, &vecAggProgFd);
+    
     ////////////////////////////////////////////////////////////////////////////////////////
 
 

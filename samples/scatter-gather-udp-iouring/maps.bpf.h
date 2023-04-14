@@ -15,7 +15,7 @@ struct {
     __uint(type, BPF_MAP_TYPE_PROG_ARRAY);
     __type(key, __u32);
     __type(value, __u32);
-    __uint(max_entries, 1);
+    __uint(max_entries, 2);
 } map_vector_aggregation_progs SEC(".maps");
 
 // Stores the pointer to the current portion of the packet body being aggregated
@@ -82,7 +82,7 @@ struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __type(key, __u32);
     __type(value, RESP_VECTOR_TYPE[VECTOR_AGGREGATION_CHUNK]);    // TODO Investigate how to make this generic...
-    __uint(max_entries, RESP_MAX_VECTOR_SIZE / VECTOR_AGGREGATION_CHUNK + 1);
+    __uint(max_entries, RESP_VECTOR_MAP_ENTRIES);
 } map_aggregated_response SEC(".maps");
 
 // look into making RESP_AGGREGATION_TYPE an array of fixed size?

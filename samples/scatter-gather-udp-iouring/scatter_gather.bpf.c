@@ -14,13 +14,13 @@
 
 static const __u32 ZERO_IDX = 0;
 
-static inline __u8 strncmp(const char* str1, const char* str2, __u32 n) {
-    #pragma clang loop unroll(full)
-    for (__u32 i = 0; i < n; ++i)
-        if (str1[i] != str2[i])
-            return 0;
-    return 1;
-}
+// static inline __u8 strncmp(const char* str1, const char* str2, __u32 n) {
+//     #pragma clang loop unroll(full)
+//     for (__u32 i = 0; i < n; ++i)
+//         if (str1[i] != str2[i])
+//             return 0;
+//     return 1;
+// }
 
 #define SG_MSG_F_PROCESSED 1
 
@@ -180,23 +180,23 @@ int scatter_prog(struct __sk_buff* skb) {
 // }
 
 
-static __u64 check_worker_status(void* map, worker_info_t* worker, worker_resp_status_t* status, __u8* waiting) {
-    if (!status)
-        return 1;
+// static __u64 check_worker_status(void* map, worker_info_t* worker, worker_resp_status_t* status, __u8* waiting) {
+//     if (!status)
+//         return 1;
 
-    *waiting = (*status == WAITING_FOR_RESPONSE);
-    return *waiting ? 1 : 0;
-}
+//     *waiting = (*status == WAITING_FOR_RESPONSE);
+//     return *waiting ? 1 : 0;
+// }
 
 
-static __u64 reset_worker_status(void* map, worker_info_t* worker, worker_resp_status_t* status, __u8* waiting) {
-    if (!status)
-        return 1;
+// static __u64 reset_worker_status(void* map, worker_info_t* worker, worker_resp_status_t* status, __u8* waiting) {
+//     if (!status)
+//         return 1;
 
-    worker_resp_status_t updated_status = WAITING_FOR_RESPONSE;
-    bpf_map_update_elem(map, worker, &updated_status, 0);
-    return 0;
-}
+//     worker_resp_status_t updated_status = WAITING_FOR_RESPONSE;
+//     bpf_map_update_elem(map, worker, &updated_status, 0);
+//     return 0;
+// }
 
 
 
@@ -269,6 +269,7 @@ int gather_prog(struct xdp_md* ctx) {
     bpf_map_update_elem(&map_vector_aggregation_chunk_idx, &ZERO_IDX, &ZERO_IDX, 0);
     // Save the pointer to the packet body
     bpf_map_update_elem(&map_packet_body_context, &ZERO_IDX, &resp_msg->body, BPF_F_CURRENT_CPU);
+
     // Perform the vector aggregation logic in a new stack frame
     bpf_tail_call(ctx, &map_vector_aggregation_progs, VECTOR_AGGREGATION_PROG_IDX);
 
@@ -297,6 +298,7 @@ int gather_prog(struct xdp_md* ctx) {
     return XDP_PASS;
 }
 
+#define MIN(a,b) ((a) < (b) ? (a) : (b))
 
 SEC("xdp")
 int vector_aggregation_prog(struct xdp_md* ctx) {
@@ -305,7 +307,8 @@ int vector_aggregation_prog(struct xdp_md* ctx) {
     if (!chunk_idx_ptr)
         return XDP_ABORTED;
 
-    __u32 chunk_idx = *chunk_idx_ptr;
+    __u32 chunk_idx = *chunk_idx_ptr;   // TODO can we remove this
+    bpf_printk("Processing chunk %d", chunk_idx);
     
     RESP_VECTOR_TYPE* resp = bpf_map_lookup_elem(&map_packet_body_context, &ZERO_IDX);
     if (!resp)
@@ -315,31 +318,31 @@ int vector_aggregation_prog(struct xdp_md* ctx) {
     if (!agg_resp)
         return XDP_ABORTED;
 
-    // bpf_printk("------ PROCESSING VECTOR CHUNK elements from %d to %d", *chunk_idx * VECTOR_AGGREGATION_CHUNK, (*chunk_idx+1) * VECTOR_AGGREGATION_CHUNK);
-
-#define MIN(a,b) ((a) < (b) ? (a) : (b))
-
-    // this is the only way to update the map element (create new result buffer)
-    // but this imposes a stack limit of 512 bytes, which restricts the effective body length of the packet
     RESP_VECTOR_TYPE updated_resp[VECTOR_AGGREGATION_CHUNK];
     __u32 chunk_size = MIN(RESP_MAX_VECTOR_SIZE - (chunk_idx * VECTOR_AGGREGATION_CHUNK), VECTOR_AGGREGATION_CHUNK);
     for (__u32 i = 0; i < chunk_size; ++i) {
         updated_resp[i] = agg_resp[i] + resp[i];
     }
-    // TODO fix indexing issues...
-    // VECTOR_AGGREGATION_CHUNK = 124 elements
-
-    bpf_map_update_elem(&map_aggregated_response, &chunk_idx, &updated_resp, 0);
 
     chunk_idx++;
     // Update the chunk index (or stop if done)
-    if (chunk_idx * VECTOR_AGGREGATION_CHUNK >= RESP_MAX_VECTOR_SIZE)
+    if (chunk_idx * VECTOR_AGGREGATION_CHUNK >= RESP_MAX_VECTOR_SIZE) {
+        bpf_printk("finished vector aggregation");
+        bpf_tail_call(ctx, &map_vector_aggregation_progs, 1);
         return XDP_PASS;
+    }
+    if (chunk_idx >= RESP_VECTOR_MAP_ENTRIES)
+        return XDP_ABORTED;
 
     bpf_map_update_elem(&map_vector_aggregation_chunk_idx, &ZERO_IDX, &chunk_idx, 0);
 
+    chunk_idx--;
+    bpf_printk("%d", updated_resp[0]);
+    // bpf_map_update_elem(&map_aggregated_response, &chunk_idx, &updated_resp, 0); // THIS IS NOT
+
     // Move the body pointer forward
-    bpf_map_update_elem(&map_packet_body_context, &ZERO_IDX, resp + VECTOR_AGGREGATION_CHUNK, 0);
+    char* updated_body = (char*) (resp + chunk_size);
+    bpf_map_update_elem(&map_packet_body_context, &ZERO_IDX, &updated_body, 0);
 
     // Repeat with remaining elements
     bpf_tail_call(ctx, &map_vector_aggregation_progs, VECTOR_AGGREGATION_PROG_IDX);
@@ -348,6 +351,33 @@ int vector_aggregation_prog(struct xdp_md* ctx) {
     return XDP_PASS;
 }
 
+
+SEC("xdp")
+int post_vector_aggregation_prog(struct xdp_md* ctx) {
+    __u32 idx = 0;
+    bpf_printk("------- Chunk %d -------", idx);
+    RESP_VECTOR_TYPE* agg_resp = bpf_map_lookup_elem(&map_aggregated_response, &idx);
+    if (!agg_resp)
+        return XDP_ABORTED;
+
+    for (__u32 i = 0; i < VECTOR_AGGREGATION_CHUNK; ++i) {
+        bpf_printk("updated_resp[%d] = %d", i, agg_resp[i]);
+    }        
+
+    idx++;
+    bpf_printk("------- Chunk %d -------", idx);
+    RESP_VECTOR_TYPE* agg_resp2 = bpf_map_lookup_elem(&map_aggregated_response, &idx);
+    if (!agg_resp2)
+        return XDP_ABORTED;
+
+    // bpf_printk("------- Chunk %d -------", c);
+    for (__u32 i = 0; i < VECTOR_AGGREGATION_CHUNK; ++i) {
+        bpf_printk("updated_resp[%d] = %d", i, agg_resp2[i]);
+    }        
+
+
+    return XDP_PASS;
+}
 
 /*
 SEC("tc")

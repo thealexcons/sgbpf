@@ -363,7 +363,7 @@ int main(int argc, char** argv) {
                     // userspace_aggregated_value += data;
                     // std::cout << "got response from worker socket: " << data << " with seq num = " << resp->hdr.seq_num << std::endl;
 
-                    // Vectorised aggregation:
+                    // Vectorised aggregation: check for control socket
                     auto data = (uint32_t*) resp->body;
                 
                     // check for multi-packet message

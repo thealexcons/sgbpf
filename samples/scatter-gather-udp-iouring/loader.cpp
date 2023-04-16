@@ -202,6 +202,10 @@ int main(int argc, char** argv) {
     vecAggProgFd = obj.findProgramByName("post_vector_aggregation_prog").value().fd();
     progIdx = 1;
     vecAggProgsMap.update(&progIdx, &vecAggProgFd);
+
+    auto aggregatedValueMap = obj.findMapByName("map_aggregated_response").value();
+    RESP_VECTOR_TYPE aggregatedChunk1[RESP_MAX_VECTOR_SIZE] = {0};
+    aggregatedValueMap.update(&zero, &aggregatedChunk1, 0);
     
     ////////////////////////////////////////////////////////////////////////////////////////
 
@@ -499,13 +503,11 @@ int main(int argc, char** argv) {
 
  
     // Get the aggregated value
-    auto aggregatedValueMap = obj.findMapByName("map_aggregated_response").value();
-    RESP_VECTOR_TYPE* value;
-    aggregatedValueMap.find(&zero, &value);
+    aggregatedValueMap.find(&zero, &aggregatedChunk1);
 
     std::cout << "Final aggregated vector (from BPF map) = " << std::endl;
     for (auto i = 0u; i < RESP_MAX_VECTOR_SIZE; i++) {
-        std::cout << value[i] << std::endl;
+        std::cout << aggregatedChunk1[i] << std::endl;
     }
 
     close(skfd);

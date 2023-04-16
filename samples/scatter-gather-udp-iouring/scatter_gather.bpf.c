@@ -266,12 +266,24 @@ int gather_prog(struct xdp_md* ctx) {
     // Single-packet response aggregation:
 
 #ifdef VECTOR_RESPONSE
+
+    RESP_VECTOR_TYPE* agg_resp = bpf_map_lookup_elem(&map_aggregated_response, &ZERO_IDX);
+    if (!agg_resp)
+        return XDP_ABORTED;
+
+    // looks like this works.... all the tail call code may not be necessary 
+    for (__u32 i = 0; i < RESP_MAX_VECTOR_SIZE; ++i) {
+        agg_resp[i] += ((RESP_VECTOR_TYPE *)resp_msg->body)[i];
+        // bpf_printk("agg_resp[%d] = %d", i, agg_resp[i]);
+    }
+    // TODO: when all vectors are received, the array must be reset to 0
+
     bpf_map_update_elem(&map_vector_aggregation_chunk_idx, &ZERO_IDX, &ZERO_IDX, 0);
     // Save the pointer to the packet body
     bpf_map_update_elem(&map_packet_body_context, &ZERO_IDX, &resp_msg->body, BPF_F_CURRENT_CPU);
 
     // Perform the vector aggregation logic in a new stack frame
-    bpf_tail_call(ctx, &map_vector_aggregation_progs, VECTOR_AGGREGATION_PROG_IDX);
+    // bpf_tail_call(ctx, &map_vector_aggregation_progs, VECTOR_AGGREGATION_PROG_IDX);
 
 #else
     // Get the int the worker responded with
@@ -307,40 +319,42 @@ int vector_aggregation_prog(struct xdp_md* ctx) {
     if (!chunk_idx_ptr)
         return XDP_ABORTED;
 
-    __u32 chunk_idx = *chunk_idx_ptr;   // TODO can we remove this
-    bpf_printk("Processing chunk %d", chunk_idx);
+    bpf_printk("Processing chunk %d", *chunk_idx_ptr);
     
     RESP_VECTOR_TYPE* resp = bpf_map_lookup_elem(&map_packet_body_context, &ZERO_IDX);
     if (!resp)
         return XDP_ABORTED;
 
+    __u32 chunk_idx = *chunk_idx_ptr;   // TODO can we remove this
     RESP_VECTOR_TYPE* agg_resp = bpf_map_lookup_elem(&map_aggregated_response, &chunk_idx);
     if (!agg_resp)
         return XDP_ABORTED;
 
+    // turns out we don't need to allocate on the stack....
+    // maybe this is not needed!!!
     RESP_VECTOR_TYPE updated_resp[VECTOR_AGGREGATION_CHUNK] = {0};
-    __u32 chunk_size = MIN(RESP_MAX_VECTOR_SIZE - (chunk_idx * VECTOR_AGGREGATION_CHUNK), VECTOR_AGGREGATION_CHUNK);
+    __u32 chunk_size = MIN(RESP_MAX_VECTOR_SIZE - (*chunk_idx_ptr * VECTOR_AGGREGATION_CHUNK), VECTOR_AGGREGATION_CHUNK);
     for (__u32 i = 0; i < chunk_size; ++i) {
-
         // updated_resp[i] = resp[i] + 1;// resp[i];   // THE PROBLEM Is the access into resp
-        updated_resp[i] = agg_resp[i] + 1;// this works
     }
-    bpf_map_update_elem(&map_aggregated_response, &chunk_idx, &updated_resp, 0);
-    bpf_printk("%d", resp[0]);
+    // bpf_map_update_elem(&map_aggregated_response, &chunk_idx, &updated_resp, 0);
+    bpf_printk("agg_resp before: %d", agg_resp[0]);
+    agg_resp[0] = 999;
 
     // Check if done
-    chunk_idx++;
-    if (chunk_idx * VECTOR_AGGREGATION_CHUNK >= RESP_MAX_VECTOR_SIZE) {
+    (*chunk_idx_ptr)++;
+    if (*chunk_idx_ptr * VECTOR_AGGREGATION_CHUNK >= RESP_MAX_VECTOR_SIZE) {
         bpf_printk("finished vector aggregation");
         bpf_tail_call(ctx, &map_vector_aggregation_progs, 1);
         return XDP_PASS;
     }
-    if (chunk_idx >= RESP_VECTOR_MAP_ENTRIES)
+    if (*chunk_idx_ptr >= RESP_VECTOR_MAP_ENTRIES)
         return XDP_ABORTED;
 
+    chunk_idx = *chunk_idx_ptr;
     bpf_map_update_elem(&map_vector_aggregation_chunk_idx, &ZERO_IDX, &chunk_idx, 0);
 
-    chunk_idx--;
+    (*chunk_idx_ptr)--;
 
     // Move the body pointer forward
     char* updated_body = (char*) (resp + chunk_size);
@@ -358,13 +372,13 @@ SEC("xdp")
 int post_vector_aggregation_prog(struct xdp_md* ctx) {
     // __u32 idx = 0;
     // bpf_printk("------- Chunk %d -------", idx);
-    // RESP_VECTOR_TYPE* agg_resp = bpf_map_lookup_elem(&map_aggregated_response, &idx);
-    // if (!agg_resp)
-    //     return XDP_ABORTED;
+    RESP_VECTOR_TYPE* agg_resp = bpf_map_lookup_elem(&map_aggregated_response, &ZERO_IDX);
+    if (!agg_resp)
+        return XDP_ABORTED;
 
-    // for (__u32 i = 0; i < VECTOR_AGGREGATION_CHUNK; ++i) {
-    //     bpf_printk("updated_resp[%d] = %d", i, agg_resp[i]);
-    // }        
+    for (__u32 i = 0; i < VECTOR_AGGREGATION_CHUNK; ++i) {
+        bpf_printk("updated_resp[%d] = %d", i, agg_resp[i]);
+    }        
 
     // idx++;
     // bpf_printk("------- Chunk %d -------", idx);
@@ -376,7 +390,6 @@ int post_vector_aggregation_prog(struct xdp_md* ctx) {
     // for (__u32 i = VECTOR_AGGREGATION_CHUNK; i < VECTOR_AGGREGATION_CHUNK * 2; ++i) {
     //     bpf_printk("updated_resp[%d] = %d", i, agg_resp2[i]);
     // }        
-
 
     return XDP_PASS;
 }

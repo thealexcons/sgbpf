@@ -81,8 +81,8 @@ struct {
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __type(key, __u32);
-    __type(value, RESP_VECTOR_TYPE[VECTOR_AGGREGATION_CHUNK]);    // TODO Investigate how to make this generic...
-    __uint(max_entries, RESP_VECTOR_MAP_ENTRIES);
+    __type(value, RESP_VECTOR_TYPE[RESP_MAX_VECTOR_SIZE]);    // TODO Investigate how to make this generic...
+    __uint(max_entries, RESP_VECTOR_MAP_ENTRIES);   // can be reverted to 1
 } map_aggregated_response SEC(".maps");
 
 // look into making RESP_AGGREGATION_TYPE an array of fixed size?

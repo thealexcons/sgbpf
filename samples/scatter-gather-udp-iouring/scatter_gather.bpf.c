@@ -22,11 +22,14 @@ static const __u32 ZERO_IDX = 0;
 //     return 1;
 // }
 
-#define SG_MSG_F_PROCESSED 1
+#define MOD_POW2(x, y) (x & (y - 1))
 
+// Offsets for specific fields in the packets
 #define IP_DEST_OFF (ETH_HLEN + offsetof(struct iphdr, daddr))
 #define UDP_DEST_OFF (ETH_HLEN + sizeof(struct iphdr) + offsetof(struct udphdr, dest))
 #define UDP_SRC_OFF (ETH_HLEN + sizeof(struct iphdr) + offsetof(struct udphdr, source))
+#define SG_MSG_FLAGS_OFF (ETH_HLEN + sizeof(struct iphdr) + sizeof(struct udphdr) + offsetof(sg_msg_t, hdr) + offsetof(struct sg_msg_hdr, flags))
+#define SG_MSG_BODY_OFF (ETH_HLEN + sizeof(struct iphdr) + sizeof(struct udphdr) + offsetof(sg_msg_t, body))
 
 static void __always_inline clone_and_send_packet(struct __sk_buff* skb, 
                                                   struct iphdr* iph, 
@@ -188,6 +191,13 @@ int scatter_prog(struct __sk_buff* skb) {
 //     return *waiting ? 1 : 0;
 // }
 
+static __u64 count_workers(void* map, __u32* idx, worker_info_t* worker, __u32* count) {
+    if (!worker || worker->app_port == 0)
+        return 1;
+
+    (*count)++;
+    return 0;
+}
 
 // static __u64 reset_worker_status(void* map, worker_info_t* worker, worker_resp_status_t* status, __u8* waiting) {
 //     if (!status)
@@ -265,6 +275,12 @@ int gather_prog(struct xdp_md* ctx) {
 
     // Single-packet response aggregation:
 
+    bpf_printk("processing msg from worker %d with flags %d", bpf_ntohs(worker.worker_port), resp_msg->hdr.flags);
+    if (resp_msg->hdr.flags == SG_MSG_F_LAST_CLONED) {
+        bpf_printk("dropping cloned (final) packet from worker %d", bpf_ntohs(worker.worker_port));
+        return XDP_PASS;
+    }
+
 #ifdef VECTOR_RESPONSE
 
     RESP_VECTOR_TYPE* agg_resp = bpf_map_lookup_elem(&map_aggregated_response, &ZERO_IDX);
@@ -273,14 +289,18 @@ int gather_prog(struct xdp_md* ctx) {
 
     // looks like this works.... all the tail call code may not be necessary 
     for (__u32 i = 0; i < RESP_MAX_VECTOR_SIZE; ++i) {
+        if (i % 25 == 0) {
+            bpf_printk("agg_resp[%d] = %d", i, agg_resp[i]);
+            bpf_printk("resp_msg[%d] = %d", i, ((RESP_VECTOR_TYPE *)resp_msg->body)[i]);
+        }
+
         agg_resp[i] += ((RESP_VECTOR_TYPE *)resp_msg->body)[i];
-        // bpf_printk("agg_resp[%d] = %d", i, agg_resp[i]);
     }
     // TODO: when all vectors are received, the array must be reset to 0
 
-    bpf_map_update_elem(&map_vector_aggregation_chunk_idx, &ZERO_IDX, &ZERO_IDX, 0);
+    // bpf_map_update_elem(&map_vector_aggregation_chunk_idx, &ZERO_IDX, &ZERO_IDX, 0);
     // Save the pointer to the packet body
-    bpf_map_update_elem(&map_packet_body_context, &ZERO_IDX, &resp_msg->body, BPF_F_CURRENT_CPU);
+    // bpf_map_update_elem(&map_packet_body_context, &ZERO_IDX, &resp_msg->body, BPF_F_CURRENT_CPU);
 
     // Perform the vector aggregation logic in a new stack frame
     // bpf_tail_call(ctx, &map_vector_aggregation_progs, VECTOR_AGGREGATION_PROG_IDX);
@@ -300,12 +320,21 @@ int gather_prog(struct xdp_md* ctx) {
 
 #endif
 
+    // Increment received packet count for the request
+    __u32 slot = MOD_POW2(resp_msg->hdr.req_id, MAX_ACTIVE_REQUESTS_ALLOWED);
+    __u32* count = bpf_map_lookup_elem(&map_workers_resp_count, &slot);
+    if (!count)
+        return XDP_ABORTED;
+
+    __u32 new_count = *count + 1;   // can we update the count pointer directly without update_elem call
+    bpf_map_update_elem(&map_workers_resp_count, &slot, &new_count, 0);
+    
     // Flag that this worker is completed
     // worker_resp_status_t updated_status = RECEIVED_RESPONSE; // cannot recycle pointers returned by map lookups!
     // bpf_map_update_elem(&map_workers_resp_status, &worker, &updated_status, 0);
 
     // Set the flag in the payload for the upper layer programs
-    // resp_msg->flags = SG_MSG_F_PROCESSED;
+    resp_msg->hdr.flags = SG_MSG_F_PROCESSED;
 
     return XDP_PASS;
 }
@@ -394,7 +423,42 @@ int post_vector_aggregation_prog(struct xdp_md* ctx) {
     return XDP_PASS;
 }
 
-/*
+
+static volatile __u32 _dummy_noop = 0;
+#define NOOP() { _dummy_noop = bpf_get_smp_processor_id(); }
+
+inline static void reset_aggregated_vector(RESP_VECTOR_TYPE* agg_vector) {
+    // ebpf sets a maximum size for memset, so we need to "hack" around it
+    #define MAX_CONTIGUOUS_MEMSET_SIZE 256
+
+    #pragma clang loop unroll(full)
+    for (__u32 i = 0; i < RESP_MAX_VECTOR_SIZE; ++i) {
+        if (MOD_POW2(i, MAX_CONTIGUOUS_MEMSET_SIZE) == 0) {
+            // bpf_printk("sss");
+            NOOP(); // dummy instruction needed to break the memset, need something cheap
+        }
+        agg_vector[i] = 0;
+
+        // set all to zero except at multiples of 256
+        // agg_vector[i] = MOD_POW2(i, MAX_CONTIGUOUS_MEMSET_SIZE) == 0;
+    }
+
+    // not ideal... need to find a quick implementation for this
+    // for (__u32 i = 0; i < RESP_MAX_VECTOR_SIZE; ++i) {
+    //     if (MOD_POW2(i, MAX_CONTIGUOUS_MEMSET_SIZE) == 0)
+    //         agg_vector[i] = 0;
+    // }
+
+    // TODO benchmark different implementations
+
+    // for (__u32 i = 1; i <= RESP_MAX_VECTOR_SIZE / MAX_CONTIGUOUS_MEMSET_SIZE; i++) {
+    //     agg_vector[(i) * 256] = 0;
+    // }
+}
+
+
+// required if we want to get aggregated result using socket read
+// not used by multi-packet messages
 SEC("tc")
 int notify_gather_ctrl_prog(struct __sk_buff* skb) {
 	void* data = (void *)(long)skb->data;
@@ -431,10 +495,72 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         return TC_ACT_OK;
 
     sg_msg_t* resp_msg = (sg_msg_t*) payload;
-    if (resp_msg->hdr.flags != SG_MSG_F_PROCESSED && resp_msg->hdr.msg_type != GATHER_MSG)
+    if (resp_msg->hdr.msg_type != GATHER_MSG 
+        || resp_msg->hdr.flags != SG_MSG_F_PROCESSED || resp_msg->hdr.flags == SG_MSG_F_LAST_CLONED)
         return TC_ACT_OK;
 
     // if this was the last packet, notify the control socket
+    __u32 slot = MOD_POW2(resp_msg->hdr.req_id, MAX_ACTIVE_REQUESTS_ALLOWED);
+    __u32* count = bpf_map_lookup_elem(&map_workers_resp_count, &slot);
+    if (!count)
+        return XDP_ABORTED;
+
+    // TODO decide how fine-grained this counting should be:
+    // - do we care about the count? or should be look at specific workers too?
+
+    // if we are doing counting, this should just be replaced with a count variable
+    // which is populated in userspace with the number of workers, rather than just
+    // iterating over the map
+    __u32 num_workers = 0;
+    bpf_for_each_map_elem(&map_workers, count_workers, &num_workers, 0);
+
+    if (num_workers == *count) {
+        bpf_printk("!!! REQUEST %d COMPLETED, NOTIFYING CTRL SOCKET !!!", resp_msg->hdr.req_id);
+
+        __u16* ctrl_sk_port = bpf_map_lookup_elem(&map_gather_ctrl_port, &ZERO_IDX);
+        if (!ctrl_sk_port)
+            return TC_ACT_SHOT;
+        
+        // Forward the final packet as usual, but mark it as cloned to avoid duplicate aggregation
+        static const unsigned char cloned_flag = SG_MSG_F_LAST_CLONED;
+        bpf_skb_store_bytes(skb, SG_MSG_FLAGS_OFF, &cloned_flag, sizeof(unsigned char), BPF_F_RECOMPUTE_CSUM);
+        bpf_clone_redirect(skb, skb->ifindex, 0);
+
+        // Notify the ctrl socket with the aggregated response in the packet body
+        RESP_VECTOR_TYPE* agg_resp = bpf_map_lookup_elem(&map_aggregated_response, &ZERO_IDX);
+        if (!agg_resp)
+            return XDP_ABORTED;
+
+        bpf_skb_store_bytes(skb, SG_MSG_BODY_OFF, (char*)agg_resp, sizeof(RESP_VECTOR_TYPE) * RESP_MAX_VECTOR_SIZE, BPF_F_RECOMPUTE_CSUM);
+        bpf_skb_store_bytes(skb, UDP_DEST_OFF, ctrl_sk_port, sizeof(*ctrl_sk_port), BPF_F_RECOMPUTE_CSUM);
+
+        // Reset the aggregated vector from this request
+        bpf_printk("reset aggregation to 0");
+        reset_aggregated_vector(agg_resp);
+        
+        // #pragma clang loop unroll(full)
+        // for (__u32 i = 0; i < RESP_MAX_VECTOR_SIZE; ++i) {
+        //     if (MOD_POW2(i, 256) == 0) {
+        //         // bpf_printk("sss");
+        //         noop();
+        //     }
+        //     agg_resp[i] = 0;
+        // }
+
+        // __builtin_memset(((char*)agg_resp), 0, sizeof(RESP_VECTOR_TYPE) * RESP_MAX_VECTOR_SIZE);
+        // bpf_printk("dfdsfds");
+        // INSTRUCTION NEEDED HERE TO TRICK THE COMPILER INTO THINKING IT ISNT A MEMSET
+        // asm ("nop");
+        // noop();
+        
+        // #pragma clang loop unroll(full)
+        // for (__u32 i = 256; i < RESP_MAX_VECTOR_SIZE; ++i) {
+        //     agg_resp[i] = 0;
+        // }
+        // bpf_printk("modified body, last value: %d", ((uint32_t*)resp_msg->body)[0]);
+    }
+
+    /*
     __u8 still_waiting = 0;
     bpf_for_each_map_elem(&map_workers_resp_status, check_worker_status, &still_waiting, 0);
 
@@ -460,11 +586,10 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         // RESET
         bpf_for_each_map_elem(&map_workers_resp_status, reset_worker_status, &still_waiting, 0);
     }
+    */
 
     return TC_ACT_OK;
 }
-
-*/
 
 
 char LICENSE[] SEC("license") = "GPL";

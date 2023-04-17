@@ -187,8 +187,8 @@ int main(int argc, char** argv) {
     auto scatterProgHookHandle = ebpf::TCHook::attach(ifindex, scatterTCProg, BPF_TC_EGRESS);
     
     // NOT needed if we ignore the ctrl socket notification
-    // auto gatherNotifyTCProg = obj.findProgramByName("notify_gather_ctrl_prog").value();
-    // auto gatherNotifyProgHookHandle = ebpf::TCHook::attach(ifindex, gatherNotifyTCProg, BPF_TC_INGRESS);
+    auto gatherNotifyTCProg = obj.findProgramByName("notify_gather_ctrl_prog").value();
+    auto gatherNotifyProgHookHandle = ebpf::TCHook::attach(ifindex, gatherNotifyTCProg, BPF_TC_INGRESS);
 
     auto gatherXdpProg = obj.findProgramByName("gather_prog").value();
     auto gatherProgHookHandle = ebpf::XDPHook::attach(ifindex, gatherXdpProg);
@@ -507,7 +507,7 @@ int main(int argc, char** argv) {
 
     std::cout << "Final aggregated vector (from BPF map) = " << std::endl;
     for (auto i = 0u; i < RESP_MAX_VECTOR_SIZE; i++) {
-        std::cout << aggregatedChunk1[i] << std::endl;
+        std::cout << "vec[" << i << "] = " << aggregatedChunk1[i] << std::endl;
     }
 
     close(skfd);
@@ -515,7 +515,7 @@ int main(int argc, char** argv) {
     
     // Detach all eBPF programs
     ebpf::TCHook::detach(scatterProgHookHandle);
-    // ebpf::TCHook::detach(gatherNotifyProgHookHandle);
+    ebpf::TCHook::detach(gatherNotifyProgHookHandle);
     ebpf::XDPHook::detach(gatherProgHookHandle);
 
     return 0;

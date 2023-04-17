@@ -9,7 +9,7 @@
 
 #define MTU_SIZE 1500
 #define MAX_SOCKETS_ALLOWED 1024
-
+#define MAX_ACTIVE_REQUESTS_ALLOWED 1024
 
 typedef enum worker_resp_status
 {
@@ -26,6 +26,14 @@ typedef struct worker_info {
     unsigned short  worker_port;    // The remote worker port (likely fixed, except for local testing)
     unsigned short  app_port;       // The assigned port on the application to listen for responses (likely not needed in the long term)
 } worker_info_t;
+
+typedef enum sg_msg_flags 
+{
+    SG_MSG_F_EMPTY = 0,     // No flags
+    SG_MSG_F_PROCESSED,     // The packet has been processed by the gather program
+    SG_MSG_F_LAST_CLONED,   // The last packet of the request, which is cloned
+
+} sg_msg_flags_t;
 
 typedef struct __attribute__((packed)) {
     // Header

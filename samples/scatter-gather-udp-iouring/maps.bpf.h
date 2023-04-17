@@ -70,6 +70,13 @@ struct {
     __uint(max_entries, MAX_SOCKETS_ALLOWED);
 } map_workers_resp_status SEC(".maps");
 
+// Stores the number of packets received for each request ID
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);    // per cpu?
+    __type(key, __u32);
+    __type(value, __u32);
+    __uint(max_entries, MAX_ACTIVE_REQUESTS_ALLOWED);
+} map_workers_resp_count SEC(".maps");
 
 // The total current value of the aggregated responses
 // TODO eventually, use an array/hash map which maps request IDs -> values
@@ -81,7 +88,7 @@ struct {
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __type(key, __u32);
-    __type(value, RESP_VECTOR_TYPE[RESP_MAX_VECTOR_SIZE]);    // TODO Investigate how to make this generic...
+    __type(value, RESP_VECTOR_TYPE[RESP_MAX_VECTOR_SIZE]);
     __uint(max_entries, RESP_VECTOR_MAP_ENTRIES);   // can be reverted to 1
 } map_aggregated_response SEC(".maps");
 

@@ -309,14 +309,14 @@ int main(int argc, char** argv) {
     // io_uring_submit(&ring);
     std::cout << "Sent scatter message" << std::endl;
 
-    // Add all the socket read operations
-    // add_socket_read(&ring, ctrlSkFd, GROUP_ID, MAX_MESSAGE_LEN, IOSQE_BUFFER_SELECT);
+    // Add all the socket read operations (workers and contrl socket)
     for (auto wfd : workerFds) {
         add_socket_read(&ring, wfd, GROUP_ID, MAX_MESSAGE_LEN, IOSQE_BUFFER_SELECT);
     }
+    add_socket_read(&ring, ctrlSkFd, GROUP_ID, MAX_MESSAGE_LEN, IOSQE_BUFFER_SELECT);
 
-    // Submit the IO requests for all the worker sockets and the write socket
-    io_uring_submit_and_wait(&ring, workerFds.size() + 1);
+    // Submit the IO requests for all the worker sockets, the ctrl socket and the write socket
+    io_uring_submit_and_wait(&ring, workerFds.size() + 2);
 
     // Submit and wait for completion (alternatively, omit _and_wait() for busy wait polling)
     // Also, see kernel thread polling mode to avoid any syscalls at all (but has high CPU usage)
@@ -369,22 +369,31 @@ int main(int argc, char** argv) {
 
                     // Vectorised aggregation: check for control socket
                     auto data = (uint32_t*) resp->body;
+
+                    // ctrl socket notification (for single-packet vectorised aggregation)
+                    if (conn_i.fd == ctrlSkFd) {
+                        std::cout << "control socket packet received\n";
+                        for (auto i = 0u; i < RESP_MAX_VECTOR_SIZE; i++) {
+                            std::cout << "vec[" << i << "] = " << data[i] << std::endl;
+                        }
+                    }
+                    else    // read operation from a worker socket
+                    {
+                        // check for multi-packet message
+                        if (expectedPacketsPerMsg != resp->hdr.num_pks && resp->hdr.num_pks > 1) {
+                            expectedPacketsPerMsg = resp->hdr.num_pks;
+
+                            // reserve slots for each packet body
+                            for (auto wfd : workerFds)
+                                multiPacketMessages[wfd].resize(resp->hdr.num_pks);                        
+                        }
+
+                        if (resp->hdr.seq_num <= resp->hdr.num_pks) {
+                            // multiPacketMessages[conn_i.fd][std::max(static_cast<int>(resp->hdr.seq_num) - 1, 0)] = std::move(data);
+                            multiPacketMessagesCount[conn_i.fd]++;
+                        }
+                    }
                 
-                    // check for multi-packet message
-                    if (expectedPacketsPerMsg != resp->hdr.num_pks && resp->hdr.num_pks > 1) {
-                        expectedPacketsPerMsg = resp->hdr.num_pks;
-
-                        // reserve slots for each packet body
-                        for (auto wfd : workerFds)
-                            multiPacketMessages[wfd].resize(resp->hdr.num_pks);                        
-                    }
-
-                    if (resp->hdr.seq_num <= resp->hdr.num_pks) {
-                        // multiPacketMessages[conn_i.fd][std::max(static_cast<int>(resp->hdr.seq_num) - 1, 0)] = std::move(data);
-                        multiPacketMessagesCount[conn_i.fd]++;
-                    }
-
-
                     // this is a notification on the ctrl socket
                     // if (conn_i.fd == ctrlSkFd) {
                     //     auto r = (sg_msg_t*) bufs[buff_id];
@@ -503,12 +512,11 @@ int main(int argc, char** argv) {
 
  
     // Get the aggregated value
-    aggregatedValueMap.find(&zero, &aggregatedChunk1);
-
-    std::cout << "Final aggregated vector (from BPF map) = " << std::endl;
-    for (auto i = 0u; i < RESP_MAX_VECTOR_SIZE; i++) {
-        std::cout << "vec[" << i << "] = " << aggregatedChunk1[i] << std::endl;
-    }
+    // aggregatedValueMap.find(&zero, &aggregatedChunk1);
+    // std::cout << "Final aggregated vector (from BPF map) = " << std::endl;
+    // for (auto i = 0u; i < RESP_MAX_VECTOR_SIZE; i++) {
+    //     std::cout << "vec[" << i << "] = " << aggregatedChunk1[i] << std::endl;
+    // }
 
     close(skfd);
 

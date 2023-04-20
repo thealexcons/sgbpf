@@ -9,8 +9,9 @@ LIBEBPFPP_LIB_DIR := ../../ebpfpp/lib/
 LOADER := loader
 SG_LOADER := sg_loader
 BPF_PROG := scatter_gather.bpf.o
+BPF_AGGREGATION_PROG := aggregation.bpf.o
 
-all: $(LOADER) $(SG_LOADER) $(BPF_PROG)
+all: $(LOADER) $(SG_LOADER) $(BPF_PROG) $(BPF_AGGREGATION_PROG)
 
 export DESTDIR := $(LIBBPF_HEADERS_DESTDIR)
 install:
@@ -35,6 +36,9 @@ $(SG_LOADER): sg_loader.cpp
 $(BPF_PROG): scatter_gather.bpf.c
 	clang -target bpf -D __BPF_TRACING__ -I$(LIBBPF_HEADERS) -g -Wall -O2 -c $^ -o $@
 
+
+$(BPF_AGGREGATION_PROG): aggregation.bpf.c
+	clang -target bpf -D __BPF_TRACING__ -I$(LIBBPF_HEADERS) -g -Wall -O2 -c $^ -o $@
 
 clean:
 	rm -f *.o *.s

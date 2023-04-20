@@ -15,24 +15,8 @@ struct {
     __uint(type, BPF_MAP_TYPE_PROG_ARRAY);
     __type(key, __u32);
     __type(value, __u32);
-    __uint(max_entries, 2);
+    __uint(max_entries, 1);
 } map_vector_aggregation_progs SEC(".maps");
-
-// Stores the pointer to the current portion of the packet body being aggregated
-struct {
-    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
-    __type(key, __u32);
-    __type(value, char*);
-    __uint(max_entries, 1);
-} map_packet_body_context SEC(".maps");
-
-// Stores the number of times the vector aggregation program has been called for the packet
-struct {
-    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
-    __type(key, __u32);
-    __type(value, __u32);
-    __uint(max_entries, 1);
-} map_vector_aggregation_chunk_idx SEC(".maps");
 
 
 // Stores the application outgoing port (for scattering)
@@ -89,7 +73,7 @@ struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __type(key, __u32);
     __type(value, RESP_VECTOR_TYPE[RESP_MAX_VECTOR_SIZE]);
-    __uint(max_entries, RESP_VECTOR_MAP_ENTRIES);   // can be reverted to 1
+    __uint(max_entries, RESP_VECTOR_MAP_ENTRIES);   // can be reverted to 1, unless we do multi-packet vector aggregation
 } map_aggregated_response SEC(".maps");
 
 // look into making RESP_AGGREGATION_TYPE an array of fixed size?
@@ -98,5 +82,13 @@ struct {
 
 // course-grained fault tolerance (recovery): use timer at application level
 // to check if the operation has complete
+
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __type(key, __u32);
+    __type(value, char[BODY_LEN]);
+    __uint(max_entries, 1);
+} map_body_data SEC(".maps");
+
 
 #endif // MAPS_BPF_H

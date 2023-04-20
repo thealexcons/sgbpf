@@ -281,29 +281,30 @@ int gather_prog(struct xdp_md* ctx) {
         return XDP_PASS;
     }
 
+    // bpf_printk("body[33] = %d", ((RESP_VECTOR_TYPE *)resp_msg->body)[33]);
+    // bpf_map_update_elem(&map_body_data, &ZERO_IDX, &resp_msg->body, 0);
+    // bpf_tail_call(ctx, &map_vector_aggregation_progs, VECTOR_AGGREGATION_PROG_IDX);
+
 #ifdef VECTOR_RESPONSE
 
     RESP_VECTOR_TYPE* agg_resp = bpf_map_lookup_elem(&map_aggregated_response, &ZERO_IDX);
     if (!agg_resp)
         return XDP_ABORTED;
 
-    // looks like this works.... all the tail call code may not be necessary 
     for (__u32 i = 0; i < RESP_MAX_VECTOR_SIZE; ++i) {
-        if (i % 25 == 0) {
-            bpf_printk("agg_resp[%d] = %d", i, agg_resp[i]);
-            bpf_printk("resp_msg[%d] = %d", i, ((RESP_VECTOR_TYPE *)resp_msg->body)[i]);
-        }
-
         agg_resp[i] += ((RESP_VECTOR_TYPE *)resp_msg->body)[i];
     }
-    // TODO: when all vectors are received, the array must be reset to 0
+    // TODO: look at different aggregation data types and operations
+    // floats, division, etc.
+    // consider different API designs, configuration, expose ctrl socket fd
+    // up to the programmer to use ctrl socket in whatever way they want
+    // worker sockets should be hidden, so the programmer can do a blocking wait
+    // on the ctrl socket or use it in epoll...
+    // maybe allow the dev to write an ebpf aggregation function and use tail call
+    // to call this ebpf program
 
-    // bpf_map_update_elem(&map_vector_aggregation_chunk_idx, &ZERO_IDX, &ZERO_IDX, 0);
-    // Save the pointer to the packet body
-    // bpf_map_update_elem(&map_packet_body_context, &ZERO_IDX, &resp_msg->body, BPF_F_CURRENT_CPU);
-
-    // Perform the vector aggregation logic in a new stack frame
-    // bpf_tail_call(ctx, &map_vector_aggregation_progs, VECTOR_AGGREGATION_PROG_IDX);
+    // week after:
+    // multi-packet vector aggregation could be done using sequence numbers
 
 #else
     // Get the int the worker responded with
@@ -339,6 +340,7 @@ int gather_prog(struct xdp_md* ctx) {
     return XDP_PASS;
 }
 
+/*
 #define MIN(a,b) ((a) < (b) ? (a) : (b))
 
 SEC("xdp")
@@ -367,8 +369,8 @@ int vector_aggregation_prog(struct xdp_md* ctx) {
         // updated_resp[i] = resp[i] + 1;// resp[i];   // THE PROBLEM Is the access into resp
     }
     // bpf_map_update_elem(&map_aggregated_response, &chunk_idx, &updated_resp, 0);
-    bpf_printk("agg_resp before: %d", agg_resp[0]);
-    agg_resp[0] = 999;
+    // bpf_printk("agg_resp before: %d", agg_resp[0]);
+    // agg_resp[0] = 999;
 
     // Check if done
     (*chunk_idx_ptr)++;
@@ -422,7 +424,7 @@ int post_vector_aggregation_prog(struct xdp_md* ctx) {
 
     return XDP_PASS;
 }
-
+*/
 
 static volatile __u32 _dummy_noop = 0;
 #define NOOP() { _dummy_noop = bpf_get_smp_processor_id(); }
@@ -434,7 +436,6 @@ inline static void reset_aggregated_vector(RESP_VECTOR_TYPE* agg_vector) {
     #pragma clang loop unroll(full)
     for (__u32 i = 0; i < RESP_MAX_VECTOR_SIZE; ++i) {
         if (MOD_POW2(i, MAX_CONTIGUOUS_MEMSET_SIZE) == 0) {
-            // bpf_printk("sss");
             NOOP(); // dummy instruction needed to break the memset, need something cheap
         }
         agg_vector[i] = 0;

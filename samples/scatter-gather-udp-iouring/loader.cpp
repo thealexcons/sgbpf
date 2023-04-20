@@ -182,6 +182,7 @@ int main(int argc, char** argv) {
     
     // Open and attach the eBPF programs
     ebpf::Object obj{argv[1]};
+    ebpf::Object aggregationProgObj{"aggregation.bpf.o"};
 
     auto scatterTCProg = obj.findProgramByName("scatter_prog").value();
     auto scatterProgHookHandle = ebpf::TCHook::attach(ifindex, scatterTCProg, BPF_TC_EGRESS);
@@ -193,15 +194,17 @@ int main(int argc, char** argv) {
     auto gatherXdpProg = obj.findProgramByName("gather_prog").value();
     auto gatherProgHookHandle = ebpf::XDPHook::attach(ifindex, gatherXdpProg);
 
+    auto aggregationProgFd = aggregationProgObj.findProgramByName("aggregation_prog").value().fd();
+
     // Load the vector aggregation program and populate the program map for tail calls
     auto vecAggProgsMap = obj.findMapByName("map_vector_aggregation_progs").value();
-    auto vecAggProgFd = obj.findProgramByName("vector_aggregation_prog").value().fd();
+    // auto vecAggProgFd = obj.findProgramByName("vector_aggregation_prog").value().fd();
     auto progIdx = VECTOR_AGGREGATION_PROG_IDX;
-    vecAggProgsMap.update(&progIdx, &vecAggProgFd);
+    vecAggProgsMap.update(&progIdx, &aggregationProgFd);
     
-    vecAggProgFd = obj.findProgramByName("post_vector_aggregation_prog").value().fd();
-    progIdx = 1;
-    vecAggProgsMap.update(&progIdx, &vecAggProgFd);
+    // vecAggProgFd = obj.findProgramByName("post_vector_aggregation_prog").value().fd();
+    // progIdx = 1;
+    // vecAggProgsMap.update(&progIdx, &vecAggProgFd);
 
     auto aggregatedValueMap = obj.findMapByName("map_aggregated_response").value();
     RESP_VECTOR_TYPE aggregatedChunk1[RESP_MAX_VECTOR_SIZE] = {0};

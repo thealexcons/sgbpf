@@ -197,10 +197,10 @@ int main(int argc, char** argv) {
     auto aggregationProgFd = aggregationProgObj.findProgramByName("aggregation_prog").value().fd();
 
     // Load the vector aggregation program and populate the program map for tail calls
-    auto vecAggProgsMap = obj.findMapByName("map_vector_aggregation_progs").value();
+    // auto vecAggProgsMap = obj.findMapByName("map_vector_aggregation_progs").value();
     // auto vecAggProgFd = obj.findProgramByName("vector_aggregation_prog").value().fd();
-    auto progIdx = VECTOR_AGGREGATION_PROG_IDX;
-    vecAggProgsMap.update(&progIdx, &aggregationProgFd);
+    // auto progIdx = VECTOR_AGGREGATION_PROG_IDX;
+    // vecAggProgsMap.update(&progIdx, &aggregationProgFd);
     
     // vecAggProgFd = obj.findProgramByName("post_vector_aggregation_prog").value().fd();
     // progIdx = 1;
@@ -310,13 +310,19 @@ int main(int argc, char** argv) {
     // add the scatter send operation to the SQ for the outgoing socket
     add_scatter_send(&ring, skfd, &servAddr);
     // io_uring_submit(&ring);
-    std::cout << "Sent scatter message" << std::endl;
+
+    std::cout << io_uring_sq_ready(&ring) << std::endl;
+    // std::cout << "Sent scatter message" << std::endl;
 
     // Add all the socket read operations (workers and contrl socket)
     for (auto wfd : workerFds) {
         add_socket_read(&ring, wfd, GROUP_ID, MAX_MESSAGE_LEN, IOSQE_BUFFER_SELECT);
     }
+    std::cout << io_uring_sq_ready(&ring) << std::endl;
+
     add_socket_read(&ring, ctrlSkFd, GROUP_ID, MAX_MESSAGE_LEN, IOSQE_BUFFER_SELECT);
+
+    std::cout << io_uring_sq_ready(&ring) << std::endl;
 
     // Submit the IO requests for all the worker sockets, the ctrl socket and the write socket
     io_uring_submit_and_wait(&ring, workerFds.size() + 2);

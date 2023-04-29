@@ -281,6 +281,7 @@ int gather_prog(struct xdp_md* ctx) {
         return XDP_PASS;
     }
 
+    // bpf_printk("resp_msg->hdr.req_id = %d", resp_msg->hdr.req_id);
     // bpf_printk("body[33] = %d", ((RESP_VECTOR_TYPE *)resp_msg->body)[33]);
     // bpf_map_update_elem(&map_body_data, &ZERO_IDX, &resp_msg->body, 0);
     // bpf_tail_call(ctx, &map_vector_aggregation_progs, VECTOR_AGGREGATION_PROG_IDX);
@@ -294,8 +295,11 @@ int gather_prog(struct xdp_md* ctx) {
     for (__u32 i = 0; i < RESP_MAX_VECTOR_SIZE; ++i) {
         agg_resp[i] += ((RESP_VECTOR_TYPE *)resp_msg->body)[i];
     }
-    // TODO: look at different aggregation data types and operations
-    // floats, division, etc.
+
+    // Notes from experiments:
+    // floats are not supported
+    // integer division always evaluates to zero
+
     // consider different API designs, configuration, expose ctrl socket fd
     // up to the programmer to use ctrl socket in whatever way they want
     // worker sockets should be hidden, so the programmer can do a blocking wait

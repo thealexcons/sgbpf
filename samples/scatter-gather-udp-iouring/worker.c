@@ -100,9 +100,9 @@ int main(int argc, char *argv[]) {
     resp_msg.hdr.body_len = sizeof(uint32_t) * RESP_MAX_VECTOR_SIZE;
     
     uint32_t vec[RESP_MAX_VECTOR_SIZE];
-    for (int i = 0; i < RESP_MAX_VECTOR_SIZE; i++)
-      vec[i] = i + 1;
-      
+    for (int i = 0; i < RESP_MAX_VECTOR_SIZE; i++) {
+        vec[i] = i+1;
+    }
     memmove(resp_msg.body, vec, resp_msg.hdr.body_len);
     if (sendto(sock, &resp_msg, sizeof(sg_msg_t), 0, (struct sockaddr *)&client, clientSize) < 0) {
         perror("sendto()");

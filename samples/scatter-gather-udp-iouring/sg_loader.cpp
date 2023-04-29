@@ -565,15 +565,15 @@ void add_socket_read(struct io_uring *ring, int fd, unsigned gid, size_t message
 }
 
 
-void add_scatter_send(struct io_uring* ring, int skfd, sockaddr_in* servAddr) {
+void add_scatter_send(struct io_uring* ring, int skfd, sockaddr_in* servAddr, const char* msg, size_t len) {
     // Send the message to itself
-    const auto SCATTER_STR = "SCATTER";
+    // const auto SCATTER_STR = "SCATTER";
     sg_msg_t scatter_msg;
     memset(&scatter_msg, 0, sizeof(sg_msg_t));
     scatter_msg.hdr.req_id = 1;
     scatter_msg.hdr.msg_type = SCATTER_MSG;
-    scatter_msg.hdr.body_len = strnlen(SCATTER_STR, BODY_LEN);
-    strncpy(scatter_msg.body, SCATTER_STR, scatter_msg.hdr.body_len);
+    scatter_msg.hdr.body_len = std::min(len, BODY_LEN);
+    strncpy(scatter_msg.body, msg, scatter_msg.hdr.body_len);
 
     // this auxilary struct is needed for the sendmsg io_uring operation
     struct iovec iov = {
@@ -603,34 +603,15 @@ void add_scatter_send(struct io_uring* ring, int skfd, sockaddr_in* servAddr) {
 template <typename TIMEOUT_UNITS, GatherCompletionPolicy POLICY>
 ScatterGatherRequest ScatterGatherUDP::scatter(const char* msg, size_t len)
 {
-    // const auto SCATTER_STR = "SCATTER";
-
-    // sg_msg_t sgmsg;
-    // memset(&sgmsg, 0, sizeof(sg_msg_t));
-    // sgmsg.hdr.req_id = 1;
-    // sgmsg.hdr.msg_type = SCATTER_MSG;
-    // sgmsg.hdr.body_len = strnlen(SCATTER_STR, BODY_LEN);
-    // strncpy(sgmsg.body, SCATTER_STR, sgmsg.hdr.body_len);
-
-    // // THIS IS SENDING, SO THERE IS SOMETHING WRONG WITH THE IO_URING SEND
-    // if (sendto(d_scatterSkFd, &sgmsg, sizeof(sg_msg_t), 0, (const struct sockaddr *)&d_scatterSkAddr, sizeof(sockaddr_in)) == -1) {
-    //     perror("sendto");
-    //     exit(EXIT_FAILURE);
-    // }
-    
-    // std::cout << "done sendto()\n";
-
-
     // set the POLICY settings in a map for the ebpf program to decide when its done
     // set a timer...
-
     int reqId = ++s_nextRequestID;
     ScatterGatherRequest req{reqId, d_workers};
 
     // Register response packet buffers for this SG request
     add_provide_buffers(&d_ioCtx.ring, req.buffers(), reqId);
 
-    add_scatter_send(&d_ioCtx.ring, d_scatterSkFd, &d_scatterSkAddr);
+    add_scatter_send(&d_ioCtx.ring, d_scatterSkFd, &d_scatterSkAddr, msg, len);
 
     // note that the buffers will be shared across multiple requests, so we need
     // a away to distinguish them maybe???
@@ -658,10 +639,7 @@ ScatterGatherRequest ScatterGatherUDP::scatter(const char* msg, size_t len)
 
             io_uring_for_each_cqe(&d_ioCtx.ring, head, cqe) {
                 ++count;
-
-                // TODO cast cqe->user_data to conn_i instead?
-                conn_info conn_i;
-                memcpy(&conn_i, &cqe->user_data, sizeof(conn_i));
+                const auto conn_i = reinterpret_cast<conn_info*>(&cqe->user_data);
 
                 if (cqe->res == -ENOBUFS) {
                     // NOTIFY USER THAT WE ARE OUT OF SPACE
@@ -670,14 +648,14 @@ ScatterGatherRequest ScatterGatherUDP::scatter(const char* msg, size_t len)
                     exit(1);
                 }
                 
-                if (conn_i.type == IO_READ) {
+                if (conn_i->type == IO_READ) {
                     int buff_id = cqe->flags >> 16;
                     if (cqe->res <= 0) {
-                        close(conn_i.fd);
+                        close(conn_i->fd);
                     } else {
                         auto resp = (sg_msg_t*) reqHandle.data(buff_id);
                         if (resp->hdr.req_id == reqHandle.id())         
-                            reqHandle.setBufferPtr(conn_i.fd, buff_id);
+                            reqHandle.setBufferPtr(conn_i->fd, buff_id);
                     }
                 }
             }
@@ -966,15 +944,5 @@ int main(int argc, char** argv) {
         std::cout << "Pk: " << ((uint32_t*)(pk->body))[33] << std::endl;
     }
 
-
-    // API design 2: abstract 
-
-    // int res;
-    // scatterGather.gather(&res);
-
-    // Different completion policies (need to specify result type in template):
-    // scatterGather.gather<int, GatherCompletionPolicy::WaitAny>(&res);
-    // GatherArgs args = { .nodesToWait = 5 };
-    // scatterGather.gather<int, GatherCompletionPolicy::WaitN>(&res, args);
 
 }

@@ -51,11 +51,15 @@ int aggregation_prog(struct xdp_md* ctx) {
     if ((act = INTRO(ctx, msg)) != XDP_PASS)
         return act;
 
-    // 1. fix new version of code: individual worker sockets should be buffer selected
-    //     ctrl socket should be outwards exposed
-    // 3. intro and outro parsing macro to hide the parsing boilerplate code
-    // 2. scatter gather array in the ctrl socket
+    // ITEM LIST (IN ORDER OF PRIORITY):
+    //  2. document the buffer selection, bgid and bid mechanism
+    //  3. support multiple requests in ebpf code
+    //  4. facilitate custom aggregation ebpf program using funcs/macros
+    //  5. start thinking about evaluation
 
+    // if time:
+    //  6. double free bug
+    //  6. timeout mechanism? or completion policy
 
     // macro benchmark: end-to-end application
     // micro benchmark: num syscalls, kernel-user crossings, num copies, cpu usage, individual components of the system

@@ -627,7 +627,14 @@ ScatterGatherRequest* ScatterGatherUDP::scatter(const char* msg, size_t len, int
 {
     // set the POLICY settings in a map for the ebpf program to decide when its done
     // set a timer...
-    auto timeout = std::chrono::microseconds{1 * 1000}; // 1 ms
+    auto timeout = std::chrono::microseconds{10 * 1000}; // 1 ms
+
+    // the timeout here doesn't make sense... it should be in ebpf code to avoid
+    // extra work 
+
+    // if this is less than the actual num of pks, another syscall
+    // is required to submit the remaining socket read operations
+    numPksPerRespMsg = 10;  
 
     int reqId = ++s_nextRequestID;    
     ScatterGatherRequest* req = nullptr;
@@ -657,11 +664,6 @@ ScatterGatherRequest* ScatterGatherUDP::scatter(const char* msg, size_t len, int
 
     add_scatter_send(&d_ioCtx.ring, d_scatterSkFd, &d_scatterSkAddr, msg, len);
 
-    // note that the buffers will be shared across multiple requests, so we need
-    // a away to distinguish them maybe???
-    // unless we provide a buffer group for each request, but would need to batch the syscall
-    // because it requires a submit...
-    // MAKE SURE TO UNDERSTAND THE BUFFER SELECTION CONTENT
     for (auto w : d_workers) {
         for (auto i = 0u; i < numPksPerRespMsg; i++) {
             add_socket_read(&d_ioCtx.ring, w.socketFd(), reqId, IOUringContext::MaxBufferSize, IOSQE_BUFFER_SELECT);
@@ -711,38 +713,42 @@ void ScatterGatherUDP::eventLoop()
                     std::scoped_lock lock{d_requestsMutex};
 
                     auto& req = d_activeRequests[reqId]; // get the associated request
-                    if (!req.hasTimedOut()) {
-                        auto resp = (sg_msg_t*) req.data(buffIdx);   // read the packet data
-                        assert(resp->hdr.req_id == req.id());
-                        req.addBufferPtr(conn_i->fd, buffIdx);
-
-                        // check for multi-packet message and add more reads if necessary
-                        if (req.d_expectedPacketsPerMessage != resp->hdr.num_pks && resp->hdr.num_pks > 1) {
-                            req.d_expectedPacketsPerMessage = resp->hdr.num_pks;                       
-                        }
-
-                        int remaining = 0;
-                        for (const auto& [wfd, ptrs] : req.d_workerBufferPtrs) {
-                            auto pksRemainingForThisWorker = abs(req.d_expectedPacketsPerMessage - ptrs.size());
-                            if (pksRemainingForThisWorker > 0) {
-                                remaining += pksRemainingForThisWorker;
-
-                                // Add the remaining socket read operations to the SQ
-                                for (auto i = 0; i < pksRemainingForThisWorker; i++)
-                                    add_socket_read(&d_ioCtx.ring, wfd, req.id(), IOUringContext::MaxBufferSize, IOSQE_BUFFER_SELECT);
-                            }
-                        }
-                        submitPendingReads = (remaining > 0);
-                    }
-                    else {
+                    if (req.hasTimedOut()) {
                         std::cout << "REQUEST " << req.id() << " TIMED OUT!!!" << std::endl;
+                        continue;
                     }
+
+                    auto resp = (sg_msg_t*) req.data(buffIdx);
+                    if (resp->hdr.req_id != req.id()) {
+                        continue; // drop old or invalid packet
+                    }
+
+                    req.addBufferPtr(conn_i->fd, buffIdx);
+
+                    // check for multi-packet message and add more reads if necessary
+                    if (req.d_expectedPacketsPerMessage != resp->hdr.num_pks && resp->hdr.num_pks > 1) {
+                        req.d_expectedPacketsPerMessage = resp->hdr.num_pks;                       
+                    }
+
+                    int remaining = 0;
+                    for (const auto& [wfd, ptrs] : req.d_workerBufferPtrs) {
+                        auto pksRemainingForThisWorker = abs(req.d_expectedPacketsPerMessage - ptrs.size());
+                        if (pksRemainingForThisWorker > 0) {
+                            remaining += pksRemainingForThisWorker;
+
+                            // Add the remaining socket read operations to the SQ
+                            for (auto i = 0; i < pksRemainingForThisWorker; i++)
+                                add_socket_read(&d_ioCtx.ring, wfd, req.id(), IOUringContext::MaxBufferSize, IOSQE_BUFFER_SELECT);
+                        }
+                    }
+                    submitPendingReads = (remaining > 0);
                 }
             }
         }
         io_uring_cq_advance(&d_ioCtx.ring, count);
 
         if (submitPendingReads) {
+            std::cout << "submit from event loop" << std::endl;
             io_uring_submit(&d_ioCtx.ring);
             submitPendingReads = false;
         }

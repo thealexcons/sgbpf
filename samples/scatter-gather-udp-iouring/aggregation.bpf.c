@@ -52,14 +52,13 @@ int aggregation_prog(struct xdp_md* ctx) {
         return act;
 
     // ITEM LIST (IN ORDER OF PRIORITY):
-    //  1. TODO specify num packets in advance
     //  3. support multiple requests in ebpf code
     //  4. facilitate custom aggregation ebpf program using funcs/macros
     //  5. start thinking about evaluation
 
     // if time:
     //  6. double free bug
-    //  6. timeout mechanism? or completion policy
+    //  6. timeout mechanism? or completion policy!!  IN EBPF CODE, not userspace
 
     // macro benchmark: end-to-end application
     // micro benchmark: num syscalls, kernel-user crossings, num copies, cpu usage, individual components of the system

@@ -52,7 +52,7 @@ int aggregation_prog(struct xdp_md* ctx) {
         return act;
 
     // ITEM LIST (IN ORDER OF PRIORITY):
-    //  2. document the buffer selection, bgid and bid mechanism
+    //  1. TODO specify num packets in advance
     //  3. support multiple requests in ebpf code
     //  4. facilitate custom aggregation ebpf program using funcs/macros
     //  5. start thinking about evaluation

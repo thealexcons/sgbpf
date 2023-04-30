@@ -229,10 +229,14 @@ ScatterGatherContext::ScatterGatherContext(const char* objFile, const char* ifna
     // d_appPortMap = d_object.findMapByName(APP_PORT_MAP_NAME).value();
     // d_gatherCtrlPortMap = d_object.findMapByName(GATHER_CTRL_PORT_MAP_NAME).value();
 
-    auto aggregationProgFd = d_aggregationProgObject.findProgramByName("aggregation_prog").value().fd();
-    auto vecAggProgsMap = d_object.findMapByName("map_vector_aggregation_progs").value();
-    auto progIdx = VECTOR_AGGREGATION_PROG_IDX;
-    vecAggProgsMap.update(&progIdx, &aggregationProgFd);
+    auto vecAggProgsMap = d_object.findMapByName("map_aggregation_progs").value();
+    auto progIdx = CUSTOM_AGGREGATION_PROG;
+    auto customAggregationProgFd = d_aggregationProgObject.findProgramByName("aggregation_prog").value().fd();
+    vecAggProgsMap.update(&progIdx, &customAggregationProgFd);
+
+    // progIdx = POST_AGGREGATION_PROG;
+    // auto postAggregationProgFd = d_aggregationProgObject.findProgramByName("post_aggregation_prog").value().fd();
+    // vecAggProgsMap.update(&progIdx, &postAggregationProgFd);
 }
 
 ScatterGatherContext::~ScatterGatherContext()
@@ -634,7 +638,7 @@ ScatterGatherRequest* ScatterGatherUDP::scatter(const char* msg, size_t len, int
 
     // if this is less than the actual num of pks, another syscall
     // is required to submit the remaining socket read operations
-    numPksPerRespMsg = 10;  
+    // numPksPerRespMsg = 10;  
 
     int reqId = ++s_nextRequestID;    
     ScatterGatherRequest* req = nullptr;

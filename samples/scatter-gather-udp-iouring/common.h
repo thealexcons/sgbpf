@@ -65,7 +65,13 @@ typedef struct __attribute__((packed)) {
 
 #define RESP_VECTOR_MAP_ENTRIES (RESP_MAX_VECTOR_SIZE / VECTOR_AGGREGATION_CHUNK + 1)
 
-#define VECTOR_AGGREGATION_PROG_IDX 0
+enum 
+{
+    CUSTOM_AGGREGATION_PROG = 0,
+    POST_AGGREGATION_PROG,
+
+    NUM_AGGREGATION_PROGS
+};
 
 #else
 #define RESP_AGGREGATION_TYPE unsigned int

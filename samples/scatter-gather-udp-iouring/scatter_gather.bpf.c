@@ -10,19 +10,11 @@
 #include <bpf/bpf_endian.h>
 
 #include "common.h"
+#include "helpers.bpf.h"
 #include "maps.bpf.h"
 
 static const __u32 ZERO_IDX = 0;
 
-// static inline __u8 strncmp(const char* str1, const char* str2, __u32 n) {
-//     #pragma clang loop unroll(full)
-//     for (__u32 i = 0; i < n; ++i)
-//         if (str1[i] != str2[i])
-//             return 0;
-//     return 1;
-// }
-
-#define MOD_POW2(x, y) (x & (y - 1))
 
 // Offsets for specific fields in the packets
 #define IP_DEST_OFF (ETH_HLEN + offsetof(struct iphdr, daddr))
@@ -283,8 +275,11 @@ int gather_prog(struct xdp_md* ctx) {
 
     // bpf_printk("resp_msg->hdr.req_id = %d", resp_msg->hdr.req_id);
     // bpf_printk("body[33] = %d", ((RESP_VECTOR_TYPE *)resp_msg->body)[33]);
-    // bpf_map_update_elem(&map_body_data, &ZERO_IDX, &resp_msg->body, 0);
-    // bpf_tail_call(ctx, &map_vector_aggregation_progs, VECTOR_AGGREGATION_PROG_IDX);
+    // bpf_printk("--------------------------------------------");
+
+    // DISCUSS: for performance, maybe just treat it as a function instead
+    // of a full program change to avoid overhead of re-parsing packet
+    bpf_tail_call(ctx, &map_aggregation_progs, CUSTOM_AGGREGATION_PROG);
 
 #ifdef VECTOR_RESPONSE
 
@@ -320,115 +315,15 @@ int gather_prog(struct xdp_md* ctx) {
     if (!agg_resp)
         return XDP_ABORTED;
 
+    // CAN THIS BE REPLACED WITH *agg_resp = *agg_resp + resp; without the update call
+    // like in the vector version? it would make the aggregation API consistent
     const __u32 updated_resp = *agg_resp + resp;
     bpf_map_update_elem(&map_aggregated_response, &ZERO_IDX, &updated_resp, 0);
 
 #endif
 
-    // Increment received packet count for the request
-    __u32 slot = MOD_POW2(resp_msg->hdr.req_id, MAX_ACTIVE_REQUESTS_ALLOWED);
-    __u32* count = bpf_map_lookup_elem(&map_workers_resp_count, &slot);
-    if (!count)
-        return XDP_ABORTED;
-
-    __u32 new_count = *count + 1;   // can we update the count pointer directly without update_elem call
-    bpf_map_update_elem(&map_workers_resp_count, &slot, &new_count, 0);
-    
-    // Flag that this worker is completed
-    // worker_resp_status_t updated_status = RECEIVED_RESPONSE; // cannot recycle pointers returned by map lookups!
-    // bpf_map_update_elem(&map_workers_resp_status, &worker, &updated_status, 0);
-
-    // Set the flag in the payload for the upper layer programs
-    resp_msg->hdr.flags = SG_MSG_F_PROCESSED;
-
-    return XDP_PASS;
+    AGGREGATION_PROG_OUTRO(resp_msg); 
 }
-
-/*
-#define MIN(a,b) ((a) < (b) ? (a) : (b))
-
-SEC("xdp")
-int vector_aggregation_prog(struct xdp_md* ctx) {
-#ifdef VECTOR_RESPONSE
-    __u32* chunk_idx_ptr = bpf_map_lookup_elem(&map_vector_aggregation_chunk_idx, &ZERO_IDX);
-    if (!chunk_idx_ptr)
-        return XDP_ABORTED;
-
-    bpf_printk("Processing chunk %d", *chunk_idx_ptr);
-    
-    RESP_VECTOR_TYPE* resp = bpf_map_lookup_elem(&map_packet_body_context, &ZERO_IDX);
-    if (!resp)
-        return XDP_ABORTED;
-
-    __u32 chunk_idx = *chunk_idx_ptr;   // TODO can we remove this
-    RESP_VECTOR_TYPE* agg_resp = bpf_map_lookup_elem(&map_aggregated_response, &chunk_idx);
-    if (!agg_resp)
-        return XDP_ABORTED;
-
-    // turns out we don't need to allocate on the stack....
-    // maybe this is not needed!!!
-    RESP_VECTOR_TYPE updated_resp[VECTOR_AGGREGATION_CHUNK] = {0};
-    __u32 chunk_size = MIN(RESP_MAX_VECTOR_SIZE - (*chunk_idx_ptr * VECTOR_AGGREGATION_CHUNK), VECTOR_AGGREGATION_CHUNK);
-    for (__u32 i = 0; i < chunk_size; ++i) {
-        // updated_resp[i] = resp[i] + 1;// resp[i];   // THE PROBLEM Is the access into resp
-    }
-    // bpf_map_update_elem(&map_aggregated_response, &chunk_idx, &updated_resp, 0);
-    // bpf_printk("agg_resp before: %d", agg_resp[0]);
-    // agg_resp[0] = 999;
-
-    // Check if done
-    (*chunk_idx_ptr)++;
-    if (*chunk_idx_ptr * VECTOR_AGGREGATION_CHUNK >= RESP_MAX_VECTOR_SIZE) {
-        bpf_printk("finished vector aggregation");
-        bpf_tail_call(ctx, &map_vector_aggregation_progs, 1);
-        return XDP_PASS;
-    }
-    if (*chunk_idx_ptr >= RESP_VECTOR_MAP_ENTRIES)
-        return XDP_ABORTED;
-
-    chunk_idx = *chunk_idx_ptr;
-    bpf_map_update_elem(&map_vector_aggregation_chunk_idx, &ZERO_IDX, &chunk_idx, 0);
-
-    (*chunk_idx_ptr)--;
-
-    // Move the body pointer forward
-    char* updated_body = (char*) (resp + chunk_size);
-    bpf_map_update_elem(&map_packet_body_context, &ZERO_IDX, &updated_body, 0);
-
-    // Repeat with remaining elements
-    bpf_tail_call(ctx, &map_vector_aggregation_progs, VECTOR_AGGREGATION_PROG_IDX);
-
-#endif
-    return XDP_PASS;
-}
-
-
-SEC("xdp")
-int post_vector_aggregation_prog(struct xdp_md* ctx) {
-    // __u32 idx = 0;
-    // bpf_printk("------- Chunk %d -------", idx);
-    RESP_VECTOR_TYPE* agg_resp = bpf_map_lookup_elem(&map_aggregated_response, &ZERO_IDX);
-    if (!agg_resp)
-        return XDP_ABORTED;
-
-    for (__u32 i = 0; i < VECTOR_AGGREGATION_CHUNK; ++i) {
-        bpf_printk("updated_resp[%d] = %d", i, agg_resp[i]);
-    }        
-
-    // idx++;
-    // bpf_printk("------- Chunk %d -------", idx);
-    // RESP_VECTOR_TYPE* agg_resp2 = bpf_map_lookup_elem(&map_aggregated_response, &idx);
-    // if (!agg_resp2)
-    //     return XDP_ABORTED;
-
-    // // bpf_printk("------- Chunk %d -------", c);
-    // for (__u32 i = VECTOR_AGGREGATION_CHUNK; i < VECTOR_AGGREGATION_CHUNK * 2; ++i) {
-    //     bpf_printk("updated_resp[%d] = %d", i, agg_resp2[i]);
-    // }        
-
-    return XDP_PASS;
-}
-*/
 
 static volatile __u32 _dummy_noop = 0;
 #define NOOP() { _dummy_noop = bpf_get_smp_processor_id(); }
@@ -542,27 +437,6 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         // Reset the aggregated vector from this request
         bpf_printk("reset aggregation to 0");
         reset_aggregated_vector(agg_resp);
-        
-        // #pragma clang loop unroll(full)
-        // for (__u32 i = 0; i < RESP_MAX_VECTOR_SIZE; ++i) {
-        //     if (MOD_POW2(i, 256) == 0) {
-        //         // bpf_printk("sss");
-        //         noop();
-        //     }
-        //     agg_resp[i] = 0;
-        // }
-
-        // __builtin_memset(((char*)agg_resp), 0, sizeof(RESP_VECTOR_TYPE) * RESP_MAX_VECTOR_SIZE);
-        // bpf_printk("dfdsfds");
-        // INSTRUCTION NEEDED HERE TO TRICK THE COMPILER INTO THINKING IT ISNT A MEMSET
-        // asm ("nop");
-        // noop();
-        
-        // #pragma clang loop unroll(full)
-        // for (__u32 i = 256; i < RESP_MAX_VECTOR_SIZE; ++i) {
-        //     agg_resp[i] = 0;
-        // }
-        // bpf_printk("modified body, last value: %d", ((uint32_t*)resp_msg->body)[0]);
     }
 
     /*

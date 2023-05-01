@@ -19,16 +19,17 @@
 
 SEC("xdp")
 int aggregation_prog(struct xdp_md* ctx) {
-    sg_msg_t* resp_msg;
-    RESP_VECTOR_TYPE* current_aggregated_value;
-    AGGREGATION_PROG_INTRO(resp_msg, current_aggregated_value);
+    return XDP_PASS;
+    // sg_msg_t* resp_msg;
+    // RESP_VECTOR_TYPE* current_aggregated_value;
+    // AGGREGATION_PROG_INTRO(resp_msg, current_aggregated_value);
 
-    // perform aggregation logic here...
-    for (__u32 i = 0; i < RESP_MAX_VECTOR_SIZE; ++i) {
-        current_aggregated_value[i] += ((RESP_VECTOR_TYPE*)resp_msg->body)[i];
-    }
+    // // perform aggregation logic here...
+    // for (__u32 i = 0; i < RESP_MAX_VECTOR_SIZE; ++i) {
+    //     current_aggregated_value[i] += ((RESP_VECTOR_TYPE*)resp_msg->body)[i];
+    // }
 
-    AGGREGATION_PROG_OUTRO(resp_msg);
+    // AGGREGATION_PROG_OUTRO(resp_msg);
 }
 
     // ITEM LIST (IN ORDER OF PRIORITY):

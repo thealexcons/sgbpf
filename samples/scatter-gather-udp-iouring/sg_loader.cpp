@@ -265,6 +265,27 @@ ScatterGatherContext::ScatterGatherContext(const char* objFile, const char* ifna
     // progIdx = POST_AGGREGATION_PROG;
     // auto postAggregationProgFd = d_aggregationProgObject.findProgramByName("post_aggregation_prog").value().fd();
     // vecAggProgsMap.update(&progIdx, &postAggregationProgFd);
+
+    // Create inner maps for each request's intermediate aggregation data
+    /*auto outerMapFd = d_object.findMapByName("map_aggregated_response").value().fd();
+    for (auto i = 0u; i < MAX_ACTIVE_REQUESTS_ALLOWED; ++i) {
+
+        struct current_agg_resp {
+            RESP_VECTOR_TYPE        data[RESP_MAX_VECTOR_SIZE];
+            struct bpf_spin_lock    lock;
+        };
+
+        std::stringstream ss;
+        ss << "map_aggregated_response_inner_" << i;
+        int fd;
+        fd = bpf_map_create(BPF_MAP_TYPE_ARRAY, ss.str().c_str(),
+                            sizeof(__u32), sizeof(current_agg_resp), RESP_VECTOR_MAP_ENTRIES, NULL);
+        if (fd < 0)
+            throw std::runtime_error{"could not create inner map"};
+
+        bpf_map_update_elem(outerMapFd, &i, &fd, BPF_ANY);
+    }
+    */
 }
 
 ScatterGatherContext::~ScatterGatherContext()

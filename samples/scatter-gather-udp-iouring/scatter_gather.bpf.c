@@ -283,13 +283,20 @@ int gather_prog(struct xdp_md* ctx) {
 
 #ifdef VECTOR_RESPONSE
 
-    RESP_VECTOR_TYPE* agg_resp = bpf_map_lookup_elem(&map_aggregated_response, &ZERO_IDX);
+    __u32 slot = GET_MAP_IDX(resp_msg->hdr.req_id);
+    void* agg_resp_map = bpf_map_lookup_elem(&map_aggregated_response, &slot);
+    if (!agg_resp_map)
+        return XDP_ABORTED;
+
+    struct current_agg_resp* agg_resp = bpf_map_lookup_elem(agg_resp_map, &ZERO_IDX);
     if (!agg_resp)
         return XDP_ABORTED;
 
+    bpf_spin_lock(&agg_resp->lock);
     for (__u32 i = 0; i < RESP_MAX_VECTOR_SIZE; ++i) {
-        agg_resp[i] += ((RESP_VECTOR_TYPE *)resp_msg->body)[i];
+        agg_resp->data[i] += ((RESP_VECTOR_TYPE *)resp_msg->body)[i];
     }
+    bpf_spin_lock(&agg_resp->lock);
 
     // Notes from experiments:
     // floats are not supported
@@ -400,7 +407,7 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         return TC_ACT_OK;
 
     // if this was the last packet, notify the control socket
-    __u32 slot = MOD_POW2(resp_msg->hdr.req_id, MAX_ACTIVE_REQUESTS_ALLOWED);
+    __u32 slot = GET_MAP_IDX(resp_msg->hdr.req_id);
     struct resp_count* rc = bpf_map_lookup_elem(&map_workers_resp_count, &slot);
     if (!rc)
         return TC_ACT_SHOT;
@@ -431,16 +438,22 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         bpf_clone_redirect(skb, skb->ifindex, 0);
 
         // Notify the ctrl socket with the aggregated response in the packet body
-        RESP_VECTOR_TYPE* agg_resp = bpf_map_lookup_elem(&map_aggregated_response, &ZERO_IDX);
-        if (!agg_resp)
+        void* agg_resp_map = bpf_map_lookup_elem(&map_aggregated_response, &slot);
+        if (!agg_resp_map)
             return TC_ACT_SHOT;
 
-        bpf_skb_store_bytes(skb, SG_MSG_BODY_OFF, (char*)agg_resp, sizeof(RESP_VECTOR_TYPE) * RESP_MAX_VECTOR_SIZE, BPF_F_RECOMPUTE_CSUM);
+        struct current_agg_resp* agg_resp = bpf_map_lookup_elem(agg_resp_map, &ZERO_IDX);
+        if (!agg_resp_map)
+            return TC_ACT_SHOT;
+
+        bpf_skb_store_bytes(skb, SG_MSG_BODY_OFF, (char*)agg_resp->data, sizeof(RESP_VECTOR_TYPE) * RESP_MAX_VECTOR_SIZE, BPF_F_RECOMPUTE_CSUM);
         bpf_skb_store_bytes(skb, UDP_DEST_OFF, ctrl_sk_port, sizeof(*ctrl_sk_port), BPF_F_RECOMPUTE_CSUM);
 
         // Reset the aggregated vector from this request
         bpf_printk("reset aggregation to 0");
-        reset_aggregated_vector(agg_resp);
+        // i don't think we need to lock this, since all pks will have arrived
+        // unless we are concurrently R/W req 0 and 1024, which wraps around
+        reset_aggregated_vector(agg_resp->data);
     } 
     else {
         bpf_spin_unlock(&rc->lock);

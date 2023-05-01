@@ -16,6 +16,7 @@
 #include "maps.bpf.h"
 
 #define MOD_POW2(x, y) (x & (y - 1))
+#define GET_MAP_IDX(req_id) MOD_POW2(req_id, MAX_ACTIVE_REQUESTS_ALLOWED)
 
 static inline enum xdp_action parse_msg_xdp(struct xdp_md* ctx, sg_msg_t** msg) {
     void* data = (void *)(long)ctx->data;
@@ -54,7 +55,7 @@ static inline enum xdp_action parse_msg_xdp(struct xdp_md* ctx, sg_msg_t** msg) 
 
 static inline enum xdp_action post_aggregation_process(sg_msg_t* resp_msg) {
     // Increment received packet count for the request
-    __u32 slot = MOD_POW2(resp_msg->hdr.req_id, MAX_ACTIVE_REQUESTS_ALLOWED);
+    __u32 slot = GET_MAP_IDX(resp_msg->hdr.req_id);
     bpf_printk("Slot for request: %d", slot);
 
     // TODO something about this not working when called from custom aggregation program
@@ -79,6 +80,7 @@ static inline enum xdp_action post_aggregation_process(sg_msg_t* resp_msg) {
     return XDP_PASS;
 }
 
+/*
 #define AGGREGATION_PROG_INTRO(resp_msg, agg_resp) { \
     int act; \
     if ((act = parse_msg_xdp(ctx, &resp_msg)) != XDP_PASS) \
@@ -88,6 +90,7 @@ static inline enum xdp_action post_aggregation_process(sg_msg_t* resp_msg) {
     if (!agg_resp) \
         return XDP_ABORTED; \
 }
+*/
 
 #define AGGREGATION_PROG_OUTRO(resp_msg) { \
     int act; \

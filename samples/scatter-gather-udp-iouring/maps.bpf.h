@@ -75,12 +75,34 @@ struct {
 // TODO this should also be thread-safe!!!!
 //  - use spin lock to update
 //  - use per cpu maps and perform a final aggregation at the end? probably faster
+// struct {
+//     __uint(type, BPF_MAP_TYPE_ARRAY);
+//     __type(key, __u32);
+//     __type(value, RESP_VECTOR_TYPE[RESP_MAX_VECTOR_SIZE]);
+//     __uint(max_entries, RESP_VECTOR_MAP_ENTRIES);   // can be reverted to 1, unless we do multi-packet vector aggregation
+// } map_aggregated_response SEC(".maps");
+
+struct current_agg_resp {
+    RESP_VECTOR_TYPE        data[RESP_MAX_VECTOR_SIZE];
+    struct bpf_spin_lock    lock;
+};
+
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __type(key, __u32);
-    __type(value, RESP_VECTOR_TYPE[RESP_MAX_VECTOR_SIZE]);
-    __uint(max_entries, RESP_VECTOR_MAP_ENTRIES);   // can be reverted to 1, unless we do multi-packet vector aggregation
+    __type(value, struct current_agg_resp);
+    __uint(max_entries, RESP_VECTOR_MAP_ENTRIES);
+} map_aggregated_response_inner SEC(".maps");
+
+// seems like this map type is not supported by my kernel...
+
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY_OF_MAPS);
+    __type(key, __u32); // req_id mod 1024
+    __type(value, __u32);   // ref to inner map
+    __uint(max_entries, MAX_ACTIVE_REQUESTS_ALLOWED);
 } map_aggregated_response SEC(".maps");
+
 
 
 #endif // MAPS_BPF_H

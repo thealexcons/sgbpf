@@ -412,7 +412,7 @@ private:
     int                     d_scatterSkFd;  // Scatter socket
     sockaddr_in             d_scatterSkAddr;
     int                     d_ctrlSkFd;     // Gather control socket
-    ScatterGatherContext    d_ctx;
+    ScatterGatherContext&   d_ctx;
     std::vector<Worker>     d_workers;
 
     const uint16_t PORT = 9225;    // just generate and add to map

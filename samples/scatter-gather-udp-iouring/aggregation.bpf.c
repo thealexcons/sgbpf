@@ -26,11 +26,10 @@ int aggregation_prog(struct xdp_md* ctx) {
 }
 
     // ITEM LIST (IN ORDER OF PRIORITY):
-    //  3. support multiple requests in ebpf code
+    //  2. fix the worker count being updated from the custom aggregation func
     //  5. start thinking about evaluation
 
     // if time:
-    //  6. double free bug
     //  6. timeout mechanism? or completion policy!!  IN EBPF CODE, not userspace
 
     // macro benchmark: end-to-end application

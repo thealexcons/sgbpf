@@ -22,7 +22,6 @@ int aggregation_prog(struct xdp_md* ctx) {
         current_aggregated_value[i] += ((RESP_VECTOR_TYPE*)resp_msg->body)[i];
     }
 
-    // bpf_printk("custom aggregation function done");
     AGGREGATION_PROG_OUTRO(resp_msg);
 }
 

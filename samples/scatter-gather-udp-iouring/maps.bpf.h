@@ -54,11 +54,17 @@ struct {
     __uint(max_entries, MAX_SOCKETS_ALLOWED);
 } map_workers_resp_status SEC(".maps");
 
+
 // Stores the number of packets received for each request ID
+struct resp_count {
+    struct bpf_spin_lock lock;
+    __u32 count;
+};
+
 struct {
-    __uint(type, BPF_MAP_TYPE_ARRAY);    // per cpu?
+    __uint(type, BPF_MAP_TYPE_ARRAY);
     __type(key, __u32);
-    __type(value, __u32);
+    __type(value, struct resp_count);
     __uint(max_entries, MAX_ACTIVE_REQUESTS_ALLOWED);
 } map_workers_resp_count SEC(".maps");
 
@@ -83,12 +89,6 @@ struct {
 // course-grained fault tolerance (recovery): use timer at application level
 // to check if the operation has complete
 
-struct {
-    __uint(type, BPF_MAP_TYPE_ARRAY);
-    __type(key, __u32);
-    __type(value, char[BODY_LEN]);
-    __uint(max_entries, 1);
-} map_body_data SEC(".maps");
 
 
 #endif // MAPS_BPF_H

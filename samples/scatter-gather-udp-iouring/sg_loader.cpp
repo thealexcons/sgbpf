@@ -726,7 +726,7 @@ void ScatterGatherUDP::eventLoop()
                     if (resp->hdr.req_id != req.id()) {
                         continue; // drop old or invalid packet
                     }
-
+                    std::cout << "Got pk " << conn_i->fd << " for req " << req.id() << std::endl;
                     req.addBufferPtr(conn_i->fd, buffIdx);
 
                     // check for multi-packet message and add more reads if necessary
@@ -787,7 +787,6 @@ int main(int argc, char** argv) {
     while (!req->hasFinished()) {}
     // wait until the request has finished, to avoid blocking on the read syscall
 
-/*
     sg_msg_t buf;
     auto b = read(sg.ctrlSkFd(), &buf, sizeof(sg_msg_t));
     assert(b == sizeof(sg_msg_t));
@@ -801,25 +800,25 @@ int main(int argc, char** argv) {
         if (i % 5 == 0)
             std::cout << "vec[" << i << "] = " << aggregatedData[i] << std::endl;
     }
-*/
+
 
     // Can also get the individual workers
     // this is useful for multi-packet responses, so the user can perform the aggregation
     // themselves in user-space
-    for (const auto& w : req->workers()) {
-        auto buffIdxs = req->bufferPointers().at(w.socketFd());
-        std::cout << "Num packets received: " << buffIdxs.size() << std::endl;
+    // for (const auto& w : req->workers()) {
+    //     auto buffIdxs = req->bufferPointers().at(w.socketFd());
+    //     std::cout << "Num packets received: " << buffIdxs.size() << std::endl;
         
-        for (auto buffIdx : buffIdxs) {
-            auto pk = (sg_msg_t*) req->data(buffIdx);
-            // std::cout << "Pk: " << buffIdx << " - " << ((uint32_t*)(pk->body)) << std::endl;
-        }
+    //     for (auto buffIdx : buffIdxs) {
+    //         auto pk = (sg_msg_t*) req->data(buffIdx);
+    //         std::cout << "Pk: " << buffIdx << " - " << ((uint32_t*)(pk->body)) << std::endl;
+    //     }
 
-        // std::cout << "[ReqID = " << req->id() << "] seq_num = " << pk->hdr.req_id << " - "
-        //           << "Worker " << w.port() << " (fd = " << w.socketFd() 
-        //           << ") with buffIdx[0] " << buffIdxs[0] << std::endl;
+    //     // std::cout << "[ReqID = " << req->id() << "] seq_num = " << pk->hdr.req_id << " - "
+    //     //           << "Worker " << w.port() << " (fd = " << w.socketFd() 
+    //     //           << ") with buffIdx[0] " << buffIdxs[0] << std::endl;
 
-    }
+    // }
 
     // TODO logic in ebpf program does not support multiple requests, needs fixing
 

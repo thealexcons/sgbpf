@@ -54,14 +54,19 @@ static inline enum xdp_action parse_msg_xdp(struct xdp_md* ctx, sg_msg_t** msg) 
 
 static inline enum xdp_action post_aggregation_process(sg_msg_t* resp_msg) {
     // Increment received packet count for the request
-    __u32 slot = MOD_POW2(resp_msg->hdr.req_id, MAX_ACTIVE_REQUESTS_ALLOWED);
-    __u32* count = bpf_map_lookup_elem(&map_workers_resp_count, &slot);
-    if (!count)
+    __u32 slot = MOD_POW2(resp_msg->hdr.req_id, MAX_ACTIVE_REQUESTS_ALLOWED) - 1;
+    bpf_printk("Slot for request: %d", slot);
+
+    // TODO something about this not working when called from custom aggregation program
+    // maybe related to tail call issue...
+    struct resp_count* rc = bpf_map_lookup_elem(&map_workers_resp_count, &slot);
+    if (!rc)
         return XDP_ABORTED;
 
-    __u32 new_count = *count + 1;   // can we update the count pointer directly without update_elem call
-    bpf_map_update_elem(&map_workers_resp_count, &slot, &new_count, 0);
-    
+    bpf_spin_lock(&rc->lock);
+    rc->count++;
+    bpf_spin_unlock(&rc->lock);
+
     // Flag that this worker is completed
     // worker_resp_status_t updated_status = RECEIVED_RESPONSE; // cannot recycle pointers returned by map lookups!
     // bpf_map_update_elem(&map_workers_resp_status, &worker, &updated_status, 0);

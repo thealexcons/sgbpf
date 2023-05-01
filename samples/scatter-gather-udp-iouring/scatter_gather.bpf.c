@@ -279,7 +279,8 @@ int gather_prog(struct xdp_md* ctx) {
 
     // DISCUSS: for performance, maybe just treat it as a function instead
     // of a full program change to avoid overhead of re-parsing packet
-    bpf_tail_call(ctx, &map_aggregation_progs, CUSTOM_AGGREGATION_PROG);
+    // TODO fix workers resp count not updating
+    // bpf_tail_call(ctx, &map_aggregation_progs, CUSTOM_AGGREGATION_PROG);
 
 #ifdef VECTOR_RESPONSE
 
@@ -400,10 +401,14 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         return TC_ACT_OK;
 
     // if this was the last packet, notify the control socket
-    __u32 slot = MOD_POW2(resp_msg->hdr.req_id, MAX_ACTIVE_REQUESTS_ALLOWED);
-    __u32* count = bpf_map_lookup_elem(&map_workers_resp_count, &slot);
-    if (!count)
+    __u32 slot = MOD_POW2(resp_msg->hdr.req_id, MAX_ACTIVE_REQUESTS_ALLOWED) - 1;
+    struct resp_count* rc = bpf_map_lookup_elem(&map_workers_resp_count, &slot);
+    if (!rc)
         return XDP_ABORTED;
+
+    bpf_spin_lock(&rc->lock);
+    __u32 count = rc->count;
+    bpf_spin_unlock(&rc->lock);
 
     // TODO decide how fine-grained this counting should be:
     // - do we care about the count? or should be look at specific workers too?
@@ -414,7 +419,7 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
     __u32 num_workers = 0;
     bpf_for_each_map_elem(&map_workers, count_workers, &num_workers, 0);
 
-    if (num_workers == *count) {
+    if (num_workers == count) {
         bpf_printk("!!! REQUEST %d COMPLETED, NOTIFYING CTRL SOCKET !!!", resp_msg->hdr.req_id);
 
         __u16* ctrl_sk_port = bpf_map_lookup_elem(&map_gather_ctrl_port, &ZERO_IDX);

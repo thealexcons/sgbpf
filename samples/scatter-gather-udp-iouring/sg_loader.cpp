@@ -100,58 +100,86 @@ std::vector<Worker> Worker::fromFile(const std::string& filePath)
 }
 
 
+namespace {
 
-////////////////////////////
-/////  ScatterProgram  ///// 
-////////////////////////////
-
-/*
-struct ScatterProgram 
-{
-    bpf_tc_hook d_tcHook;
-    bpf_tc_opts d_tcOpts;
-
-    constexpr static const auto SCATTER_PROG_NAME = "scatter_prog";
-
-    ScatterProgram() = default;
-    ScatterProgram(const ebpf::Object& obj, uint32_t ifindex);
-
-    ~ScatterProgram();
+enum {
+    IO_READ,
+    IO_WRITE,
 };
 
-ScatterProgram::ScatterProgram(const ebpf::Object& obj, uint32_t ifindex) 
-{
-    auto prog = obj.findProgramByName(SCATTER_PROG_NAME);
-    if (!prog)
-		throw std::runtime_error{"Failed to find scatter program"};
+typedef struct conn_info {
+    int   fd;
+    __u16 type;
+    __u16 bgid;    // reqID
+} conn_info;
 
-    memset(&d_tcHook, 0, sizeof(bpf_tc_hook));
-    d_tcHook.attach_point = BPF_TC_EGRESS;
-    d_tcHook.ifindex = ifindex;
-    d_tcHook.sz = sizeof(bpf_tc_hook);
+// void add_provide_buffers(struct io_uring* ring, void* buffers, int buffGroupID) {
+//     // Register packet buffers for buffer selection for the given request (buffGroupID)
+//     io_uring_sqe* sqe = io_uring_get_sqe(ring);
+//     io_uring_prep_provide_buffers(
+//         sqe, buffers, IOUringContext::MaxBufferSize, IOUringContext::NumBuffers, buffGroupID, 0
+//     );
+//     // io_uring_submit(ring);
 
-    auto err = bpf_tc_hook_create(&d_tcHook);
-	if (err && err != -EEXIST)
-		throw std::runtime_error{"Failed to create TC hook"};
+//     // move this error handling somewhere else?    
+//     // io_uring_cqe* cqe;
+//     // io_uring_wait_cqe(ring, &cqe);
+//     // if (cqe->res < 0)
+//     //     throw std::runtime_error{"Failed to provide buffers during io_uring setup"};
+//     // io_uring_cqe_seen(ring, cqe);
+// }
 
-    memset(&d_tcOpts, 0, sizeof(bpf_tc_opts));
-    d_tcOpts.prog_fd = prog.value().fd();
-    d_tcOpts.sz = sizeof(bpf_tc_opts);
+void add_socket_read(struct io_uring *ring, int fd, unsigned gid, size_t message_size, unsigned flags) {
+    io_uring_sqe *sqe = io_uring_get_sqe(ring);
+    io_uring_prep_recv(sqe, fd, NULL, message_size, MSG_WAITALL); // wait for all fragments to arrive
+    io_uring_sqe_set_flags(sqe, flags);
+    sqe->buf_group = gid;
 
-    if (bpf_tc_attach(&d_tcHook, &d_tcOpts) < 0)
-		throw std::runtime_error{"Failed to attach program to TC egress hook"};
-
-    std::cout << "Attached TC scatter program" << std::endl;
+    conn_info conn_i = {
+        .fd = fd,
+        .type = IO_READ,
+        .bgid = gid,
+    };
+    memcpy(&sqe->user_data, &conn_i, sizeof(conn_info));
 }
 
-ScatterProgram::~ScatterProgram()
-{
-    bpf_tc_detach(&d_tcHook, &d_tcOpts);
-    bpf_tc_hook_destroy(&d_tcHook);
 
-    std::cout << "Dettached TC scatter program" << std::endl;
+void add_scatter_send(struct io_uring* ring, int skfd, int reqID, sockaddr_in* servAddr, const char* msg, size_t len) {
+    // Send the message to itself
+    sg_msg_t scatter_msg;
+    memset(&scatter_msg, 0, sizeof(sg_msg_t));
+    scatter_msg.hdr.req_id = reqID;
+    scatter_msg.hdr.msg_type = SCATTER_MSG;
+    scatter_msg.hdr.body_len = std::min(len, BODY_LEN);
+    strncpy(scatter_msg.body, msg, scatter_msg.hdr.body_len);
+
+    // this auxilary struct is needed for the sendmsg io_uring operation
+    struct iovec iov = {
+		.iov_base = &scatter_msg,
+		.iov_len = sizeof(sg_msg_t),
+	};
+
+	struct msghdr msgh;
+    memset(&msgh, 0, sizeof(msgh));
+	msgh.msg_name = servAddr;
+	msgh.msg_namelen = sizeof(sockaddr_in);
+	msgh.msg_iov = &iov;
+	msgh.msg_iovlen = 1;
+
+    // TODO look into sendmsg_zc (zero-copy), might be TCP only though...
+    io_uring_sqe *sqe = io_uring_get_sqe(ring);
+    io_uring_prep_sendmsg(sqe, skfd, &msgh, 0);
+    io_uring_sqe_set_flags(sqe, 0);
+
+    conn_info conn_i = {
+        .fd = skfd,
+        .type = IO_WRITE,
+    };
+    memcpy(&sqe->user_data, &conn_i, sizeof(conn_info));
 }
-*/
+
+}
+
 
 
 //////////////////////////////
@@ -260,19 +288,6 @@ void ScatterGatherContext::setGatherControlPort(uint16_t port)
     d_gatherCtrlPortMap.update(&ZERO, &portNetBytes);
 }
 
-// void ScatterGatherContext::setWorkers(const std::vector<Worker>& workers)
-// {
-//     d_workers = workers;
-
-//     auto workerIpMap = d_object.findMapByName(WORKER_IPS_MAP_NAME).value();
-//     auto workerPortMap = d_object.findMapByName(WORKER_PORTS_MAP_NAME).value();
-//     for (auto i = 0u; i < workers.size(); ++i) {
-//         auto ip = workers[i].ipAddressNet();
-//         auto port = workers[i].portNet();
-//         workerIpMap.update(&i, &ip);
-//         workerPortMap.update(&i, &port);
-//     }
-// }
 
 struct IOUringContext 
 {
@@ -378,8 +393,6 @@ protected:
         d_workerBufferPtrs[workerFd].push_back(ptr);
     }
 
-    void* buffers() const { return (char*) d_buffers; }
-
     void start() {
         d_startTime = std::chrono::steady_clock::now();
     }
@@ -388,6 +401,22 @@ protected:
         auto end = std::chrono::steady_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - d_startTime);
         return duration >= d_timeOut; 
+    }
+
+    void registerBuffers(io_uring* ring, bool forceSubmit = false) {
+        io_uring_sqe* sqe = io_uring_get_sqe(ring);
+        io_uring_prep_provide_buffers(
+            sqe, d_buffers, IOUringContext::MaxBufferSize, IOUringContext::NumBuffers, d_requestID, 0
+        );
+        if (forceSubmit)
+            io_uring_submit(ring);
+    }
+
+    void freeBuffers(io_uring* ring, bool forceSubmit = false) {
+        io_uring_sqe* sqe = io_uring_get_sqe(ring);
+        io_uring_prep_remove_buffers(sqe, IOUringContext::NumBuffers, d_requestID);
+        if (forceSubmit)
+            io_uring_submit(ring);
     }
 };
 
@@ -546,85 +575,6 @@ ScatterGatherUDP::~ScatterGatherUDP()
     //     close(w.socketFd());
 }
 
-namespace {
-
-enum {
-    IO_READ,
-    IO_WRITE,
-};
-
-typedef struct conn_info {
-    int   fd;
-    __u16 type;
-    __u16 bgid;    // reqID
-} conn_info;
-
-void add_provide_buffers(struct io_uring* ring, void* buffers, int buffGroupID) {
-    // Register packet buffers for buffer selection for the given request (buffGroupID)
-    io_uring_sqe* sqe = io_uring_get_sqe(ring);
-    io_uring_prep_provide_buffers(
-        sqe, buffers, IOUringContext::MaxBufferSize, IOUringContext::NumBuffers, buffGroupID, 0
-    );
-    // io_uring_submit(ring);
-
-    // move this error handling somewhere else?    
-    // io_uring_cqe* cqe;
-    // io_uring_wait_cqe(ring, &cqe);
-    // if (cqe->res < 0)
-    //     throw std::runtime_error{"Failed to provide buffers during io_uring setup"};
-    // io_uring_cqe_seen(ring, cqe);
-}
-
-void add_socket_read(struct io_uring *ring, int fd, unsigned gid, size_t message_size, unsigned flags) {
-    io_uring_sqe *sqe = io_uring_get_sqe(ring);
-    io_uring_prep_recv(sqe, fd, NULL, message_size, MSG_WAITALL); // wait for all fragments to arrive
-    io_uring_sqe_set_flags(sqe, flags);
-    sqe->buf_group = gid;
-
-    conn_info conn_i = {
-        .fd = fd,
-        .type = IO_READ,
-        .bgid = gid,
-    };
-    memcpy(&sqe->user_data, &conn_i, sizeof(conn_info));
-}
-
-
-void add_scatter_send(struct io_uring* ring, int skfd, int reqID, sockaddr_in* servAddr, const char* msg, size_t len) {
-    // Send the message to itself
-    sg_msg_t scatter_msg;
-    memset(&scatter_msg, 0, sizeof(sg_msg_t));
-    scatter_msg.hdr.req_id = reqID;
-    scatter_msg.hdr.msg_type = SCATTER_MSG;
-    scatter_msg.hdr.body_len = std::min(len, BODY_LEN);
-    strncpy(scatter_msg.body, msg, scatter_msg.hdr.body_len);
-
-    // this auxilary struct is needed for the sendmsg io_uring operation
-    struct iovec iov = {
-		.iov_base = &scatter_msg,
-		.iov_len = sizeof(sg_msg_t),
-	};
-
-	struct msghdr msgh;
-    memset(&msgh, 0, sizeof(msgh));
-	msgh.msg_name = servAddr;
-	msgh.msg_namelen = sizeof(sockaddr_in);
-	msgh.msg_iov = &iov;
-	msgh.msg_iovlen = 1;
-
-    // TODO look into sendmsg_zc (zero-copy), might be TCP only though...
-    io_uring_sqe *sqe = io_uring_get_sqe(ring);
-    io_uring_prep_sendmsg(sqe, skfd, &msgh, 0);
-    io_uring_sqe_set_flags(sqe, 0);
-
-    conn_info conn_i = {
-        .fd = skfd,
-        .type = IO_WRITE,
-    };
-    memcpy(&sqe->user_data, &conn_i, sizeof(conn_info));
-}
-
-}
 
 template <typename TIMEOUT_UNITS, GatherCompletionPolicy POLICY>
 ScatterGatherRequest* ScatterGatherUDP::scatter(const char* msg, size_t len, int numPksPerRespMsg)
@@ -644,6 +594,9 @@ ScatterGatherRequest* ScatterGatherUDP::scatter(const char* msg, size_t len, int
     ScatterGatherRequest* req = nullptr;
     {
         std::scoped_lock lock{d_requestsMutex};
+
+        // TODO: this can be a fixed size array because we have a limit
+        // on the maximum number of active requests
         d_activeRequests[reqId] = ScatterGatherRequest{reqId, 
                                                        d_workers, 
                                                        numPksPerRespMsg, 
@@ -654,6 +607,8 @@ ScatterGatherRequest* ScatterGatherUDP::scatter(const char* msg, size_t len, int
         // by cancelled and old requests
         // How to handle this?? buffers can be recycled by submitting another provide_buffers
         // or can be freed by submitting remove_buffers ... 
+        // when a request is considered done, call req->freeBuffers(&d_ioCtx.ring);
+        // in destructor?? or manually?
     }
 
     // Register response packet buffers for this SG request
@@ -664,7 +619,7 @@ ScatterGatherRequest* ScatterGatherUDP::scatter(const char* msg, size_t len, int
     // to the request ID) and the buffer ID is automatically set by io_uring and obtained
     // in the event loop thread, which saves this ID so it can be used by the developer
     // as a pointer into the buffer to read the packet contents.
-    add_provide_buffers(&d_ioCtx.ring, req->buffers(), req->id());
+    req->registerBuffers(&d_ioCtx.ring);
 
     add_scatter_send(&d_ioCtx.ring, d_scatterSkFd, reqId, &d_scatterSkAddr, msg, len);
 

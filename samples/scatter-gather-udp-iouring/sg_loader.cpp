@@ -640,7 +640,7 @@ ScatterGatherRequest* ScatterGatherUDP::scatter(const char* msg, size_t len, int
     // is required to submit the remaining socket read operations
     // numPksPerRespMsg = 10;  
 
-    int reqId = s_nextRequestID++;    
+    int reqId = s_nextRequestID++;
     ScatterGatherRequest* req = nullptr;
     {
         std::scoped_lock lock{d_requestsMutex};
@@ -830,7 +830,5 @@ int main(int argc, char** argv) {
     std::cout << buf.hdr.req_id << std::endl;
     aggregatedData = (uint32_t*)(buf.body);
     std::cout << "Got req2 response, example: vec[33] = " << aggregatedData[33] << std::endl;
-    
-
 
 }

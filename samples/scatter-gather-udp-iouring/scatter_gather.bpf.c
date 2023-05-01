@@ -442,6 +442,11 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         // Reset the aggregated vector from this request
         bpf_printk("reset aggregation to 0");
         reset_aggregated_vector(agg_resp);
+
+        // TODO reset any other state
+        bpf_spin_lock(&rc->lock);
+        rc->count = 0;
+        bpf_spin_unlock(&rc->lock);
     }
 
     /*

@@ -401,7 +401,7 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         return TC_ACT_OK;
 
     // if this was the last packet, notify the control socket
-    __u32 slot = MOD_POW2(resp_msg->hdr.req_id, MAX_ACTIVE_REQUESTS_ALLOWED) - 1;
+    __u32 slot = MOD_POW2(resp_msg->hdr.req_id, MAX_ACTIVE_REQUESTS_ALLOWED);
     struct resp_count* rc = bpf_map_lookup_elem(&map_workers_resp_count, &slot);
     if (!rc)
         return XDP_ABORTED;

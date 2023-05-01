@@ -54,7 +54,7 @@ static inline enum xdp_action parse_msg_xdp(struct xdp_md* ctx, sg_msg_t** msg) 
 
 static inline enum xdp_action post_aggregation_process(sg_msg_t* resp_msg) {
     // Increment received packet count for the request
-    __u32 slot = MOD_POW2(resp_msg->hdr.req_id, MAX_ACTIVE_REQUESTS_ALLOWED) - 1;
+    __u32 slot = MOD_POW2(resp_msg->hdr.req_id, MAX_ACTIVE_REQUESTS_ALLOWED);
     bpf_printk("Slot for request: %d", slot);
 
     // TODO something about this not working when called from custom aggregation program

@@ -590,11 +590,11 @@ void add_socket_read(struct io_uring *ring, int fd, unsigned gid, size_t message
 }
 
 
-void add_scatter_send(struct io_uring* ring, int skfd, sockaddr_in* servAddr, const char* msg, size_t len) {
+void add_scatter_send(struct io_uring* ring, int skfd, int reqID, sockaddr_in* servAddr, const char* msg, size_t len) {
     // Send the message to itself
     sg_msg_t scatter_msg;
     memset(&scatter_msg, 0, sizeof(sg_msg_t));
-    scatter_msg.hdr.req_id = 1;
+    scatter_msg.hdr.req_id = reqID;
     scatter_msg.hdr.msg_type = SCATTER_MSG;
     scatter_msg.hdr.body_len = std::min(len, BODY_LEN);
     strncpy(scatter_msg.body, msg, scatter_msg.hdr.body_len);
@@ -640,7 +640,7 @@ ScatterGatherRequest* ScatterGatherUDP::scatter(const char* msg, size_t len, int
     // is required to submit the remaining socket read operations
     // numPksPerRespMsg = 10;  
 
-    int reqId = ++s_nextRequestID;    
+    int reqId = s_nextRequestID++;    
     ScatterGatherRequest* req = nullptr;
     {
         std::scoped_lock lock{d_requestsMutex};
@@ -666,7 +666,7 @@ ScatterGatherRequest* ScatterGatherUDP::scatter(const char* msg, size_t len, int
     // as a pointer into the buffer to read the packet contents.
     add_provide_buffers(&d_ioCtx.ring, req->buffers(), req->id());
 
-    add_scatter_send(&d_ioCtx.ring, d_scatterSkFd, &d_scatterSkAddr, msg, len);
+    add_scatter_send(&d_ioCtx.ring, d_scatterSkFd, reqId, &d_scatterSkAddr, msg, len);
 
     for (auto w : d_workers) {
         for (auto i = 0u; i < numPksPerRespMsg; i++) {
@@ -797,7 +797,7 @@ int main(int argc, char** argv) {
     auto aggregatedData = (uint32_t*)(buf.body);
     std::cout << "control socket packet received\n";
     for (auto i = 0u; i < RESP_MAX_VECTOR_SIZE; i++) {
-        if (i % 5 == 0)
+        if (i % 25 == 0)
             std::cout << "vec[" << i << "] = " << aggregatedData[i] << std::endl;
     }
 
@@ -822,9 +822,15 @@ int main(int argc, char** argv) {
 
     // TODO logic in ebpf program does not support multiple requests, needs fixing
 
-    // auto req2 = sg.scatter("SCATTER");
-    // while (!req2.hasFinished()) {}
-    // read(sg.ctrlSkFd(), buf, sizeof(buf));
-    // std::cout << ((sg_msg_t*) buf)->hdr.req_id << std::endl;
+    auto req2 = sg.scatter("SCATTER");
+    std::cout << "\nSENT SECOND REQUEST " << std::endl;
+
+    while (!req2->hasFinished()) {}
+    read(sg.ctrlSkFd(), &buf, sizeof(sg_msg_t));
+    std::cout << buf.hdr.req_id << std::endl;
+    aggregatedData = (uint32_t*)(buf.body);
+    std::cout << "Got req2 response, example: vec[33] = " << aggregatedData[33] << std::endl;
+    
+
 
 }

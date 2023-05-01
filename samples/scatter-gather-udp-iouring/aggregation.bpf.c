@@ -11,6 +11,12 @@
 #include <linux/ip.h>
 
 
+// if this program is placed in scatter_gather.bpf.c , it works
+// correctly. might be due to being two different objects and the maps
+// are instantiated separately??? may need to pin.
+// alternative is to see discussion about making this a regular
+// function call.
+
 SEC("xdp")
 int aggregation_prog(struct xdp_md* ctx) {
     sg_msg_t* resp_msg;
@@ -27,7 +33,8 @@ int aggregation_prog(struct xdp_md* ctx) {
 
     // ITEM LIST (IN ORDER OF PRIORITY):
     //  2. fix the worker count being updated from the custom aggregation func
-    //  5. start thinking about evaluation
+    //  3. thread-safety in maps and per-request separation of state
+    //  5. start thinking about evaluation (see below)
 
     // if time:
     //  6. timeout mechanism? or completion policy!!  IN EBPF CODE, not userspace

@@ -201,7 +201,6 @@ static __u64 count_workers(void* map, __u32* idx, worker_info_t* worker, __u32* 
 // }
 
 
-
 SEC("xdp")
 int gather_prog(struct xdp_md* ctx) {
     void* data = (void *)(long)ctx->data;
@@ -279,7 +278,7 @@ int gather_prog(struct xdp_md* ctx) {
 
     // DISCUSS: for performance, maybe just treat it as a function instead
     // of a full program change to avoid overhead of re-parsing packet
-    // TODO fix workers resp count not updating
+    // TODO fix workers resp count not updating (due to being in different eBPF object)
     // bpf_tail_call(ctx, &map_aggregation_progs, CUSTOM_AGGREGATION_PROG);
 
 #ifdef VECTOR_RESPONSE
@@ -396,19 +395,15 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         return TC_ACT_OK;
 
     sg_msg_t* resp_msg = (sg_msg_t*) payload;
-    if (resp_msg->hdr.msg_type != GATHER_MSG 
-        || resp_msg->hdr.flags != SG_MSG_F_PROCESSED || resp_msg->hdr.flags == SG_MSG_F_LAST_CLONED)
+    if (resp_msg->hdr.flags == SG_MSG_F_LAST_CLONED || resp_msg->hdr.flags != SG_MSG_F_PROCESSED
+        || resp_msg->hdr.msg_type != GATHER_MSG)
         return TC_ACT_OK;
 
     // if this was the last packet, notify the control socket
     __u32 slot = MOD_POW2(resp_msg->hdr.req_id, MAX_ACTIVE_REQUESTS_ALLOWED);
     struct resp_count* rc = bpf_map_lookup_elem(&map_workers_resp_count, &slot);
     if (!rc)
-        return XDP_ABORTED;
-
-    bpf_spin_lock(&rc->lock);
-    __u32 count = rc->count;
-    bpf_spin_unlock(&rc->lock);
+        return TC_ACT_SHOT;
 
     // TODO decide how fine-grained this counting should be:
     // - do we care about the count? or should be look at specific workers too?
@@ -419,7 +414,11 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
     __u32 num_workers = 0;
     bpf_for_each_map_elem(&map_workers, count_workers, &num_workers, 0);
 
-    if (num_workers == count) {
+    bpf_spin_lock(&rc->lock);
+    if (num_workers == rc->count) {
+        rc->count = 0;  // reset immediately to avoid duplicate notifications
+        bpf_spin_unlock(&rc->lock);
+
         bpf_printk("!!! REQUEST %d COMPLETED, NOTIFYING CTRL SOCKET !!!", resp_msg->hdr.req_id);
 
         __u16* ctrl_sk_port = bpf_map_lookup_elem(&map_gather_ctrl_port, &ZERO_IDX);
@@ -434,7 +433,7 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         // Notify the ctrl socket with the aggregated response in the packet body
         RESP_VECTOR_TYPE* agg_resp = bpf_map_lookup_elem(&map_aggregated_response, &ZERO_IDX);
         if (!agg_resp)
-            return XDP_ABORTED;
+            return TC_ACT_SHOT;
 
         bpf_skb_store_bytes(skb, SG_MSG_BODY_OFF, (char*)agg_resp, sizeof(RESP_VECTOR_TYPE) * RESP_MAX_VECTOR_SIZE, BPF_F_RECOMPUTE_CSUM);
         bpf_skb_store_bytes(skb, UDP_DEST_OFF, ctrl_sk_port, sizeof(*ctrl_sk_port), BPF_F_RECOMPUTE_CSUM);
@@ -442,10 +441,8 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         // Reset the aggregated vector from this request
         bpf_printk("reset aggregation to 0");
         reset_aggregated_vector(agg_resp);
-
-        // TODO reset any other state
-        bpf_spin_lock(&rc->lock);
-        rc->count = 0;
+    } 
+    else {
         bpf_spin_unlock(&rc->lock);
     }
 

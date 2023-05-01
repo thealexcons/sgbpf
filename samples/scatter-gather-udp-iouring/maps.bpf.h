@@ -82,13 +82,5 @@ struct {
     __uint(max_entries, RESP_VECTOR_MAP_ENTRIES);   // can be reverted to 1, unless we do multi-packet vector aggregation
 } map_aggregated_response SEC(".maps");
 
-// look into making RESP_AGGREGATION_TYPE an array of fixed size?
-// vectorised aggregation inside ebpf (single packet)
-// make configurable whether to return final response or all responses
-
-// course-grained fault tolerance (recovery): use timer at application level
-// to check if the operation has complete
-
-
 
 #endif // MAPS_BPF_H

@@ -66,6 +66,7 @@ static inline enum xdp_action post_aggregation_process(sg_msg_t* resp_msg) {
     bpf_spin_lock(&rc->lock);
     rc->count++;
     bpf_spin_unlock(&rc->lock);
+    bpf_printk("new count is %d", rc->count);
 
     // Flag that this worker is completed
     // worker_resp_status_t updated_status = RECEIVED_RESPONSE; // cannot recycle pointers returned by map lookups!

@@ -329,6 +329,13 @@ int main(int argc, char** argv) {
 
     // Submit and wait for completion (alternatively, omit _and_wait() for busy wait polling)
     // Also, see kernel thread polling mode to avoid any syscalls at all (but has high CPU usage)
+    // SQ kthread polling: https://unixism.net/loti/tutorial/sq_poll.html
+    // params.flags |= IORING_SETUP_SQPOLL;
+    // params.sq_thread_idle = 2000;    // in ms, time to wake up sq thread if no activity
+    // but kernel polling mode has it's own cost. If the system call overhead is no where close 
+    // to being a bottle neck, i.e. you don't do system calls "that" much, e.g. because your 
+    // endpoints take longer to complete then using kernel polling mode can degrade the overall system performance. And potential increase power consumption and as such heat generation.
+
 
     // RESP_AGGREGATION_TYPE userspace_aggregated_value = 0;
     std::vector<int> processedWorkerFds;

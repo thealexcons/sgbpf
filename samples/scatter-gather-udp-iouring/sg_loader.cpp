@@ -28,6 +28,7 @@
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
 
+#define SQ_POLL_MODE_ENABLED 1
 
 ////////////////////////////
 ////////   Worker   //////// 
@@ -289,6 +290,13 @@ void ScatterGatherContext::setGatherControlPort(uint16_t port)
     d_gatherCtrlPortMap.update(&ZERO, &portNetBytes);
 }
 
+void print_sq_poll_kernel_thread_status() {
+
+    if (system("ps --ppid 2 | grep io_uring-sq" ) == 0)
+        printf("Kernel thread io_uring-sq found running...\n");
+    else
+        printf("Kernel thread io_uring-sq is not running.\n");
+}
 
 struct IOUringContext 
 {
@@ -304,8 +312,15 @@ struct IOUringContext
         // Initialise io_uring
         io_uring_params params;
         memset(&params, 0, sizeof(params));
+
+// #ifdef SQ_POLL_MODE_ENABLED
+//         params.flags |= IORING_SETUP_SQPOLL;
+//         params.sq_thread_idle = 2000;   // 2 seconds before sleeping
+// #endif
         if (io_uring_queue_init_params(numEntries, &ring, &params) < 0)
             throw std::runtime_error{"Failed to initialise io_uring queue"}; 
+
+        // print_sq_poll_kernel_thread_status();
 
         // // Register packet buffers for buffer selection 
         // io_uring_sqe* sqe = io_uring_get_sqe(&ring);
@@ -625,7 +640,7 @@ ScatterGatherRequest* ScatterGatherUDP::scatter(const char* msg, size_t len, int
 {
     // set the POLICY settings in a map for the ebpf program to decide when its done
     // set a timer...
-    auto timeout = std::chrono::microseconds{10 * 1000}; // 1 ms
+    auto timeout = std::chrono::microseconds{100 * 1000}; // 1 ms
 
     // the timeout here doesn't make sense... it should be in ebpf code to avoid
     // extra work 
@@ -674,6 +689,8 @@ ScatterGatherRequest* ScatterGatherUDP::scatter(const char* msg, size_t len, int
     }
     io_uring_submit(&d_ioCtx.ring);
     req->start();
+
+    print_sq_poll_kernel_thread_status();
 
     return req;
 }
@@ -823,8 +840,6 @@ int main(int argc, char** argv) {
     //     //           << ") with buffIdx[0] " << buffIdxs[0] << std::endl;
 
     // }
-
-    // TODO logic in ebpf program does not support multiple requests, needs fixing
 
     auto req2 = sg.scatter("SCATTER");
     std::cout << "\nSENT SECOND REQUEST " << std::endl;

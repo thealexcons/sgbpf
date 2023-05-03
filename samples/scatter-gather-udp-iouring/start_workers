@@ -28,6 +28,4 @@ time.sleep(aliveTime)
 
 for p in procs:
     p.terminate()
-    stdout, stderr = p.communicate(b'\n')
-    print(stdout)
 

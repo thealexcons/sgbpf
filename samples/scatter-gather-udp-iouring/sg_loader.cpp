@@ -640,7 +640,7 @@ ScatterGatherRequest* ScatterGatherUDP::scatter(const char* msg, size_t len, int
 {
     // set the POLICY settings in a map for the ebpf program to decide when its done
     // set a timer...
-    auto timeout = std::chrono::microseconds{100 * 1000}; // 1 ms
+    auto timeout = std::chrono::microseconds{50 * 1000}; // 1 ms
 
     // the timeout here doesn't make sense... it should be in ebpf code to avoid
     // extra work 
@@ -822,6 +822,8 @@ int main(int argc, char** argv) {
             std::cout << "vec[" << i << "] = " << aggregatedData[i] << std::endl;
     }
 
+    std::cout << "Got a total of " << req->bufferPointers().size() << std::endl;
+
 
     // Can also get the individual workers
     // this is useful for multi-packet responses, so the user can perform the aggregation
@@ -841,6 +843,7 @@ int main(int argc, char** argv) {
 
     // }
 
+/*
     auto req2 = sg.scatter("SCATTER");
     std::cout << "\nSENT SECOND REQUEST " << std::endl;
 
@@ -853,5 +856,5 @@ int main(int argc, char** argv) {
     std::cout << buf.hdr.req_id << std::endl;
     aggregatedData = (uint32_t*)(buf.body);
     std::cout << "Got req2 response, example: vec[33] = " << aggregatedData[33] << std::endl;
-
+*/
 }

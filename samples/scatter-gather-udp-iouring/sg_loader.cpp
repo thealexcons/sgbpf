@@ -318,6 +318,10 @@ struct IOUringContext
         //     throw std::runtime_error{"Failed to provide buffers during io_uring setup"};
         // io_uring_cqe_seen(&ring, cqe);
     }
+
+    ~IOUringContext() {
+        io_uring_queue_exit(&ring);
+    }
 };
 
 /////////////////////////////
@@ -480,6 +484,7 @@ private:
     int                     d_ctrlSkFd;     // Gather control socket
     ScatterGatherContext&   d_ctx;
     std::vector<Worker>     d_workers;
+    std::atomic_bool        d_alive;
 
     const uint16_t PORT = 9225;    // just generate and add to map
 
@@ -579,6 +584,7 @@ ScatterGatherUDP::ScatterGatherUDP(ScatterGatherContext& ctx,
         throw std::runtime_error{"Failed bind() on scatter socket"};
 
     // Start the background event loop thread
+    d_alive = true;
     std::thread bg{&ScatterGatherUDP::eventLoop, this};
     bg.detach();
 }
@@ -606,10 +612,11 @@ ScatterGatherUDP::~ScatterGatherUDP()
 {
     // TODO rather than opening and closing a socket every time, we could keep
     // a global pool of reusable sockets to avoid this on every invokation of the primitive
-    // close(d_scatterSkFd);
-    // close(d_ctrlSkFd);
-    // for (auto w : d_workers)
-    //     close(w.socketFd());
+    d_alive = false;
+    close(d_scatterSkFd);
+    close(d_ctrlSkFd);
+    for (auto w : d_workers)
+        close(w.socketFd());
 }
 
 
@@ -682,7 +689,7 @@ void ScatterGatherUDP::eventLoop()
     // io_uring event loop in background thread
     // this thread will keep track of the pointers to the packet buffers which
     // are received for all requests
-    while (1) {
+    while (d_alive) {
         io_uring_cqe *cqe;
         unsigned count = 0;
         unsigned head;

@@ -147,6 +147,17 @@ int scatter_prog(struct __sk_buff* skb) {
 
         bpf_printk("Got SCATTER request");
 
+        // start timer for request
+        __u32 slot = GET_REQ_MAP_SLOT(sgh->hdr.req_id);
+        struct req_timing* rqt = bpf_map_lookup_elem(&map_req_timing, &slot);
+        if (!rqt)
+            return TC_ACT_OK;
+
+        rqt->start_ns = bpf_ktime_get_ns();
+        rqt->timeout_ns = 10 * 1000000; // default timeout of 10ms
+        // Instead of using a syscall to set the timeout for each request, maybe
+        // include the timeout value (in micros or millis) in the header when sent out
+
         // Clone the outgoing packet to all the registered workers
         struct send_worker_ctx data = {
             .skb = skb,
@@ -199,6 +210,27 @@ static __u64 count_workers(void* map, __u32* idx, worker_info_t* worker, __u32* 
 //     bpf_map_update_elem(map, worker, &updated_status, 0);
 //     return 0;
 // }
+
+inline static void reset_aggregated_vector(RESP_VECTOR_TYPE* agg_vector) {
+    // ebpf sets a maximum size for memset, so we need to "hack" around it
+    #define MAX_CONTIGUOUS_MEMSET_SIZE 256
+
+    #pragma clang loop unroll(full)
+    for (__u32 i = 0; i < RESP_MAX_VECTOR_SIZE; ++i) {
+        if (MOD_POW2(i, MAX_CONTIGUOUS_MEMSET_SIZE) == 0) {
+            barrier(); // dummy instruction needed to break the memset, need something cheap
+        }
+        agg_vector[i] = 0;
+    }
+}
+
+inline static void cleanup_request_state(__u32 reqId) {
+    // TODO cleanup all state for the given request
+}
+
+inline static __u8 request_timed_out(struct req_timing* rqt) {
+    return (bpf_ktime_get_ns() - rqt->start_ns > rqt->timeout_ns);
+} 
 
 
 SEC("xdp")
@@ -257,6 +289,19 @@ int gather_prog(struct xdp_md* ctx) {
     sg_msg_t* resp_msg = (sg_msg_t*) payload;
     if (resp_msg->hdr.msg_type != GATHER_MSG)
         return XDP_DROP;
+
+    // Check for time-out
+    __u32 slot = GET_REQ_MAP_SLOT(resp_msg->hdr.req_id);
+    struct req_timing* rqt = bpf_map_lookup_elem(&map_req_timing, &slot);
+    if (!rqt)
+        return XDP_ABORTED;
+
+    if (request_timed_out(rqt)) {
+        // TODO perform cleanup
+        cleanup_request_state(resp_msg->hdr.req_id); // or just pass in the map ptrs directly
+        bpf_printk("Request %d timed out!!!!", resp_msg->hdr.req_id);
+        return XDP_DROP;
+    }
 
     // If this is a multi-packet message, forward the packet without aggregation
     if (resp_msg->hdr.num_pks > 1 && resp_msg->hdr.seq_num <= resp_msg->hdr.num_pks) {
@@ -325,37 +370,6 @@ int gather_prog(struct xdp_md* ctx) {
     AGGREGATION_PROG_OUTRO(resp_msg); 
 }
 
-static volatile __u32 _dummy_noop = 0;
-#define NOOP() { _dummy_noop = bpf_get_smp_processor_id(); }
-
-inline static void reset_aggregated_vector(RESP_VECTOR_TYPE* agg_vector) {
-    // ebpf sets a maximum size for memset, so we need to "hack" around it
-    #define MAX_CONTIGUOUS_MEMSET_SIZE 256
-
-    #pragma clang loop unroll(full)
-    for (__u32 i = 0; i < RESP_MAX_VECTOR_SIZE; ++i) {
-        if (MOD_POW2(i, MAX_CONTIGUOUS_MEMSET_SIZE) == 0) {
-            NOOP(); // dummy instruction needed to break the memset, need something cheap
-        }
-        agg_vector[i] = 0;
-
-        // set all to zero except at multiples of 256
-        // agg_vector[i] = MOD_POW2(i, MAX_CONTIGUOUS_MEMSET_SIZE) == 0;
-    }
-
-    // not ideal... need to find a quick implementation for this
-    // for (__u32 i = 0; i < RESP_MAX_VECTOR_SIZE; ++i) {
-    //     if (MOD_POW2(i, MAX_CONTIGUOUS_MEMSET_SIZE) == 0)
-    //         agg_vector[i] = 0;
-    // }
-
-    // TODO benchmark different implementations
-
-    // for (__u32 i = 1; i <= RESP_MAX_VECTOR_SIZE / MAX_CONTIGUOUS_MEMSET_SIZE; i++) {
-    //     agg_vector[(i) * 256] = 0;
-    // }
-}
-
 
 // required if we want to get aggregated result using socket read
 // not used by multi-packet messages
@@ -399,8 +413,18 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         || resp_msg->hdr.msg_type != GATHER_MSG)
         return TC_ACT_OK;
 
-    // if this was the last packet, notify the control socket
-    __u32 slot = MOD_POW2(resp_msg->hdr.req_id, MAX_ACTIVE_REQUESTS_ALLOWED);
+    // Check for time-out
+    __u32 slot = GET_REQ_MAP_SLOT(resp_msg->hdr.req_id);
+    struct req_timing* rqt = bpf_map_lookup_elem(&map_req_timing, &slot);
+    if (!rqt)
+        return TC_ACT_OK;
+    if (request_timed_out(rqt)) {
+        // TODO perform cleanup
+        cleanup_request_state(resp_msg->hdr.req_id); // or just pass in the map ptrs directly
+        bpf_printk("Request %d timed out!!!!", resp_msg->hdr.req_id);
+        return TC_ACT_SHOT;
+    }
+
     struct resp_count* rc = bpf_map_lookup_elem(&map_workers_resp_count, &slot);
     if (!rc)
         return TC_ACT_SHOT;

@@ -54,13 +54,26 @@ struct {
     __uint(max_entries, MAX_SOCKETS_ALLOWED);
 } map_workers_resp_status SEC(".maps");
 
+// Stores the timing information about requests for handling time outs
+struct req_timing {
+    __u64 start_ns;
+    __u64 timeout_ns;
+};
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __type(key, __u32);
+    __type(value, struct req_timing);
+    __uint(max_entries, MAX_ACTIVE_REQUESTS_ALLOWED);
+} map_req_timing SEC(".maps");
+
 
 // Stores the number of packets received for each request ID
 struct resp_count {
     struct bpf_spin_lock lock;
     __u32 count;
 };
-
+// consider making this atomic, but tried to use compare and swap and clang
+// didn't work
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __type(key, __u32);

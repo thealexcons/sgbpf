@@ -10,6 +10,7 @@
 #include <csignal>
 #include <thread>
 #include <mutex>
+#include <atomic>
 
 #include <arpa/inet.h>
 #include <net/if.h>
@@ -325,6 +326,14 @@ struct IOUringContext
 
 class ScatterGatherUDP;
 
+enum req_status {
+    WAITING,
+    READY,
+    TIMED_OUT,
+    ERROR
+};
+
+
 class ScatterGatherRequest
 {
     // Manages the state and execution of a scatter gather request. Each invocation
@@ -332,11 +341,11 @@ class ScatterGatherRequest
 
 private:
     // DATA MEMBERS
-    int                 d_requestID;                    // The unique request ID
-    std::vector<Worker> d_workers;
-    int                 d_expectedPacketsPerMessage = 1;    // The number of expected packets per response message
-    std::mutex*         d_mutex;
-    // std::unordered_map<int, uint32_t>           d_workerPacketCount;    // The number of packets received for each worker
+    int                     d_requestID;                    // The unique request ID
+    std::vector<Worker>     d_workers;
+    int                     d_expectedPacketsPerMessage = 1;    // The number of expected packets per response message
+    std::mutex*             d_mutex;
+    std::atomic<uint8_t>    d_status;
     std::chrono::microseconds d_timeOut;
     std::chrono::time_point<std::chrono::steady_clock> d_startTime;
 
@@ -359,6 +368,7 @@ public:
         : d_requestID{requestID}
         , d_workers{workers}
         , d_expectedPacketsPerMessage{numPksPerMsg}
+        , d_status{req_status::ERROR}
         , d_timeOut{timeOut}
         , d_mutex{mut}
     {}
@@ -372,8 +382,40 @@ public:
     // TODO use Worker instance as key instead of FD
     const std::unordered_map<int, std::vector<int>>& bufferPointers() const { return d_workerBufferPtrs; };
 
+    bool isReady() const {
+        return d_status.load(std::memory_order_acquire) == req_status::READY;
+    }
+
+    bool isExpired() const {
+        // NOTE: Using this as a condition in the busy-wait loop is useless because
+        // if the kernel drops the packets on time out, the event loop is not able
+        // to update the status. Hence, the user has to check for time out themselves.
+        // Discussion: is this fine? or should we allow processing in the kernel despite timeout?
+        return d_status.load(std::memory_order_acquire) == req_status::TIMED_OUT;
+    }
+
+    bool hasTimedOut() const {
+        auto end = std::chrono::steady_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - d_startTime);
+        return duration >= d_timeOut; 
+    }
+
+
+protected:
+
+    friend ScatterGatherUDP;
+
+    void addBufferPtr(int workerFd, int ptr) {
+        d_workerBufferPtrs[workerFd].push_back(ptr);
+    }
+
+    void start() {
+        d_status.store(req_status::WAITING);
+        d_startTime = std::chrono::steady_clock::now();
+    }
+
     /* TODO check if policy has met based on num of workers */
-    bool hasFinished() { 
+    bool receivedAll() const { 
         if (d_expectedPacketsPerMessage == 1)
             return d_workerBufferPtrs.size() == d_workers.size();
 
@@ -385,22 +427,17 @@ public:
         return numPacketsReceived == d_workers.size() * d_expectedPacketsPerMessage;
     };
 
-protected:
+    void updateStatus() {
+        if (hasTimedOut()) {
+            std::cout  << "DEBUGGING: request " << id() << " has timed out!!" << std::endl;
+            d_status.store(req_status::TIMED_OUT, std::memory_order_release);
+            return;
+        }
 
-    friend ScatterGatherUDP;
-
-    void addBufferPtr(int workerFd, int ptr) {
-        d_workerBufferPtrs[workerFd].push_back(ptr);
-    }
-
-    void start() {
-        d_startTime = std::chrono::steady_clock::now();
-    }
-
-    bool hasTimedOut() const {
-        auto end = std::chrono::steady_clock::now();
-        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - d_startTime);
-        return duration >= d_timeOut; 
+        if (receivedAll()) {
+            d_status.store(req_status::READY, std::memory_order_release);
+            return;
+        }
     }
 
     void registerBuffers(io_uring* ring, bool forceSubmit = false) {
@@ -597,11 +634,11 @@ ScatterGatherRequest* ScatterGatherUDP::scatter(const char* msg, size_t len, int
 
         // TODO: this can be a fixed size array because we have a limit
         // on the maximum number of active requests
-        d_activeRequests[reqId] = ScatterGatherRequest{reqId, 
-                                                       d_workers, 
-                                                       numPksPerRespMsg, 
-                                                       timeout,
-                                                       &d_requestsMutex};
+        d_activeRequests.emplace(std::piecewise_construct,
+             std::forward_as_tuple(reqId),
+             std::forward_as_tuple(reqId, d_workers, numPksPerRespMsg, timeout, &d_requestsMutex)
+        );
+
         req = &d_activeRequests[reqId];
         // TODO need a garbage collection mechanism to free the memory used
         // by cancelled and old requests
@@ -673,7 +710,7 @@ void ScatterGatherUDP::eventLoop()
 
                     auto& req = d_activeRequests[reqId]; // get the associated request
                     if (req.hasTimedOut()) {
-                        std::cout << "REQUEST " << req.id() << " TIMED OUT!!!" << std::endl;
+                        req.updateStatus();
                         continue;
                     }
 
@@ -683,6 +720,7 @@ void ScatterGatherUDP::eventLoop()
                     }
                     std::cout << "Got pk " << conn_i->fd << " for req " << req.id() << std::endl;
                     req.addBufferPtr(conn_i->fd, buffIdx);
+                    req.updateStatus();
 
                     // check for multi-packet message and add more reads if necessary
                     if (req.d_expectedPacketsPerMessage != resp->hdr.num_pks && resp->hdr.num_pks > 1) {
@@ -739,8 +777,12 @@ int main(int argc, char** argv) {
     std::cout << "sent scatter" << std::endl;
 
     // Read the ctrl socket with the aggregated value
-    while (!req->hasFinished()) {}
+    while (!req->isReady() && !req->hasTimedOut()) {}
     // wait until the request has finished, to avoid blocking on the read syscall
+    if (req->hasTimedOut()) {
+        std::cout << "Request timed out :(" << std::endl;
+        return 0;
+    }
 
     sg_msg_t buf;
     auto b = read(sg.ctrlSkFd(), &buf, sizeof(sg_msg_t));
@@ -780,7 +822,11 @@ int main(int argc, char** argv) {
     auto req2 = sg.scatter("SCATTER");
     std::cout << "\nSENT SECOND REQUEST " << std::endl;
 
-    while (!req2->hasFinished()) {}
+    while (!req2->isReady() && !req2->hasTimedOut()) {}
+    if (req2->hasTimedOut()) {
+        std::cout << "Request timed out :(" << std::endl;
+        return 0;
+    }
     read(sg.ctrlSkFd(), &buf, sizeof(sg_msg_t));
     std::cout << buf.hdr.req_id << std::endl;
     aggregatedData = (uint32_t*)(buf.body);

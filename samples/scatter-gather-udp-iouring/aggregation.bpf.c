@@ -17,6 +17,9 @@
 // alternative is to see discussion about making this a regular
 // function call.
 
+// pin map and find from within
+// 
+
 SEC("xdp")
 int aggregation_prog(struct xdp_md* ctx) {
     sg_msg_t* resp_msg;
@@ -28,7 +31,7 @@ int aggregation_prog(struct xdp_md* ctx) {
         current_aggregated_value[i] += ((RESP_VECTOR_TYPE*)resp_msg->body)[i];
     }
 
-    AGGREGATION_PROG_OUTRO(resp_msg);
+    AGGREGATION_PROG_OUTRO(ctx, resp_msg);
 }
 
     // ITEM LIST (IN ORDER OF PRIORITY):
@@ -36,16 +39,23 @@ int aggregation_prog(struct xdp_md* ctx) {
     // need to discuss event loop in separate thread... if we are using multiple threads
     // it might even be worth looking into the io_uring kernel thread to make zero syscalls
 
-    //  2. fix the worker count being updated from the custom aggregation func
-    //      No idea what the problem is... very weird
+    //  4. consider ebpf prog vs regular func call for custom aggregation logic
+    //      in terms of performance, ease of use, etc.
     //  3. thread-safety in maps and per-request separation of state
     //      Need to get ARRAY_OF_MAPS to work for this
-    //  4. Atomics for worker count instead of spin lock
-    //      LLVM fails when compiling the compare_and_swap operation
-    //  https://www.ibm.com/docs/en/xl-c-aix/13.1.0?topic=functions-sync-bool-compare-swap
-    //  6. timeout mechanism? or completion policy!!  IN EBPF CODE, not userspace
-    //      see comment in isExpired() in ScatterGatherRequest class
+    //  COMPLETION MECHANISM: implement completion conditions for: ALL, ANY, N
+    //  TIME OUT MECHANISM: measure in userspace, if timed out, make syscall to
+    //      cleanup state in the ebpf program
+
     //  5. start thinking about evaluation (see below)
+
+    // Research socket layer programs and their capabilities
+    // redirection, per-socket storage, etc. to see if this system could be
+    // replicated in TCP. Preliminary work under "future work" section in report 
+
+    // week after:
+    // multi-packet vector aggregation could be done using sequence numbers
+
 
     // key metrics: 
     //      1- throughput (number of requests per second) 
@@ -56,9 +66,11 @@ int aggregation_prog(struct xdp_md* ctx) {
     // micro benchmark: 
     //      num syscalls (via strace) 
     //      kernel-user crossings (num ctx switches proxy?) 
+    //          https://stackoverflow.com/questions/21777430/what-does-high-involuntary-context-switches-mean
     //      num copies (to investigate) 
     //      cpu usage
     //      individual components of the system 
     //          (measure per-request latency of each BPF program, profile and find hotspots)
+    //  look at FPGA paper for evaluation metrics
 
 char LICENSE[] SEC("license") = "GPL";

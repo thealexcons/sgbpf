@@ -79,6 +79,7 @@ struct {
     __type(key, __u32);
     __type(value, struct resp_count);
     __uint(max_entries, MAX_ACTIVE_REQUESTS_ALLOWED);
+    // __uint(pinning, LIBBPF_PIN_BY_NAME);
 } map_workers_resp_count SEC(".maps");
 
 // The total current value of the aggregated responses
@@ -92,8 +93,11 @@ struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __type(key, __u32);
     __type(value, RESP_VECTOR_TYPE[RESP_MAX_VECTOR_SIZE]);
-    __uint(max_entries, RESP_VECTOR_MAP_ENTRIES);   // can be reverted to 1, unless we do multi-packet vector aggregation
+    __uint(max_entries, MAX_ACTIVE_REQUESTS_ALLOWED);
+    // __uint(pinning, LIBBPF_PIN_BY_NAME);
 } map_aggregated_response SEC(".maps");
 
+// FOr multi-packet vector aggregation, extra layer of indirection is needed
+// to store MAX_PACKETS * DATA_ARRAY per request
 
 #endif // MAPS_BPF_H

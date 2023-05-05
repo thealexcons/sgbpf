@@ -261,7 +261,8 @@ ScatterGatherContext::ScatterGatherContext(const char* objFile, const char* ifna
 
     auto vecAggProgsMap = d_object.findMapByName("map_aggregation_progs").value();
     auto progIdx = CUSTOM_AGGREGATION_PROG;
-    auto customAggregationProgFd = d_aggregationProgObject.findProgramByName("aggregation_prog").value().fd();
+    auto customAggregationProg = d_aggregationProgObject.findProgramByName("aggregation_prog").value();
+    auto customAggregationProgFd = customAggregationProg.fd();
     vecAggProgsMap.update(&progIdx, &customAggregationProgFd);
 
     // progIdx = POST_AGGREGATION_PROG;
@@ -525,15 +526,6 @@ public:
 
     int ctrlSkFd() const { return d_ctrlSkFd; }
 
-    // it might be better to set the completion policy in the invokation
-    // since we only expose the sockets
-
-    // template <typename RESULT, 
-    //           typename TIMEOUT_UNITS = std::chrono::microseconds,
-    //           GatherCompletionPolicy POLICY = GatherCompletionPolicy::WaitAll>
-    // void gather(RESULT* result,
-    //             TIMEOUT_UNITS timeout = {},
-    //             GatherArgs gatherArgs = {});
 private:
 
     void eventLoop();
@@ -550,6 +542,8 @@ ScatterGatherUDP::ScatterGatherUDP(ScatterGatherContext& ctx,
     , d_workers{workers}
     , d_ioCtx{2048}
 {
+    d_activeRequests.reserve(MAX_ACTIVE_REQUESTS_ALLOWED);
+
     d_ctx.setScatterPort(PORT);
 
     // Configure the worker sockets
@@ -784,13 +778,12 @@ void ScatterGatherUDP::eventLoop()
 
 int main(int argc, char** argv) {
 
-    // globally initialises the library and prepares eBPF subsystem
+    // globally initialises the library and prepares eBPF environment
     // ScatterGather::init("scatter_gather.json");
-    auto workers = Worker::fromFile("workers.cfg");
     ScatterGatherContext ctx{argv[1], argv[2]};
 
+    auto workers = Worker::fromFile("workers.cfg");
     ScatterGatherUDP sg{ctx, workers};
-    std::cout << "Created context and operation\n";
 
     // User can configure the ctrl socket as they wish, eg: set non blocking flag
     int flags = fcntl(sg.ctrlSkFd(), F_GETFL, 0);
@@ -801,12 +794,12 @@ int main(int argc, char** argv) {
     std::cout << "sent scatter" << std::endl;
 
     // Read the ctrl socket with the aggregated value
-    while (!req->isReady() && !req->hasTimedOut()) {}
-    // wait until the request has finished, to avoid blocking on the read syscall
-    if (req->hasTimedOut()) {
-        std::cout << "Request timed out :(" << std::endl;
-        return 0;
-    }
+    // while (!req->isReady() && !req->hasTimedOut()) {}
+    // // wait until the request has finished, to avoid blocking on the read syscall
+    // if (req->hasTimedOut()) {
+    //     std::cout << "Request timed out :(" << std::endl;
+    //     return 0;
+    // }
 
     sg_msg_t buf;
     auto b = read(sg.ctrlSkFd(), &buf, sizeof(sg_msg_t));
@@ -814,6 +807,12 @@ int main(int argc, char** argv) {
     // Important: it is up to the user to verify that this corresponds to the
     // request's ID, since the ctrl sk is global to all ongoing requests
     assert(buf.hdr.req_id == req->id());
+
+    // Process the completed events in the io_uring queue
+    // To be called periodically or directly after an event on the ctrl sk
+    // sg.poll();
+    // sg.pollRequest(id);
+    // decouple threading model from library
 
     auto aggregatedData = (uint32_t*)(buf.body);
     std::cout << "control socket packet received\n";

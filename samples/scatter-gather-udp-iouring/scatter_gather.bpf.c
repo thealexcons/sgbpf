@@ -13,6 +13,12 @@
 #include "helpers.bpf.h"
 #include "maps.bpf.h"
 
+// #define CUSTOM_AGGREGATION 1
+
+#ifdef CUSTOM_AGGREGATION
+#include "custom_aggregation.bpf.h"
+#endif // CUSTOM_AGGREGATION
+
 static const __u32 ZERO_IDX = 0;
 
 
@@ -33,13 +39,13 @@ static void __always_inline clone_and_send_packet(struct __sk_buff* skb,
     (void) iph;
     (void) udph;
 
-    char str[16] = "";
-    __u32 ip_addr_h = bpf_ntohl(worker_ip);
-	BPF_SNPRINTF(str, sizeof(str), "%d.%d.%d.%d",
-		(ip_addr_h >> 24) & 0xff, (ip_addr_h >> 16) & 0xff,
-		(ip_addr_h >> 8) & 0xff, ip_addr_h & 0xff);
+    // char str[16] = "";
+    // __u32 ip_addr_h = bpf_ntohl(worker_ip);
+	// BPF_SNPRINTF(str, sizeof(str), "%d.%d.%d.%d",
+	// 	(ip_addr_h >> 24) & 0xff, (ip_addr_h >> 16) & 0xff,
+	// 	(ip_addr_h >> 8) & 0xff, ip_addr_h & 0xff);
 
-    bpf_printk("Sending packet to %s:%d", str, bpf_ntohs(worker_port));
+    // bpf_printk("Sending packet to %s:%d", str, bpf_ntohs(worker_port));
 
     // 1. Update the packet header for the new destination
     bpf_skb_store_bytes(skb, IP_DEST_OFF, &worker_ip, sizeof(worker_ip), BPF_F_RECOMPUTE_CSUM);
@@ -228,6 +234,7 @@ inline static void cleanup_request_state(__u32 reqId) {
     // TODO cleanup all state for the given request
 }
 
+// TODO have time out check in userspace, if timed out, invoke syscall to cleanup
 inline static __u8 request_timed_out(struct req_timing* rqt) {
     return (bpf_ktime_get_ns() - rqt->start_ns > rqt->timeout_ns);
 } 
@@ -321,10 +328,16 @@ int gather_prog(struct xdp_md* ctx) {
     // bpf_printk("body[33] = %d", ((RESP_VECTOR_TYPE *)resp_msg->body)[33]);
     // bpf_printk("--------------------------------------------");
 
+    bpf_tail_call(ctx, &map_aggregation_progs, CUSTOM_AGGREGATION_PROG);
+
     // DISCUSS: for performance, maybe just treat it as a function instead
     // of a full program change to avoid overhead of re-parsing packet
-    // TODO fix workers resp count not updating (due to being in different eBPF object)
-    // bpf_tail_call(ctx, &map_aggregation_progs, CUSTOM_AGGREGATION_PROG);
+    // as a raw function call, this works
+#ifdef CUSTOM_AGGREGATION
+    aggregate(resp_msg, agg_resp);
+    AGGREGATION_PROG_OUTRO(resp_msg);
+#endif // CUSTOM_AGGREGATION
+
 
 #ifdef VECTOR_RESPONSE
 
@@ -335,20 +348,6 @@ int gather_prog(struct xdp_md* ctx) {
     for (__u32 i = 0; i < RESP_MAX_VECTOR_SIZE; ++i) {
         agg_resp[i] += ((RESP_VECTOR_TYPE *)resp_msg->body)[i];
     }
-
-    // Notes from experiments:
-    // floats are not supported
-    // integer division always evaluates to zero
-
-    // consider different API designs, configuration, expose ctrl socket fd
-    // up to the programmer to use ctrl socket in whatever way they want
-    // worker sockets should be hidden, so the programmer can do a blocking wait
-    // on the ctrl socket or use it in epoll...
-    // maybe allow the dev to write an ebpf aggregation function and use tail call
-    // to call this ebpf program
-
-    // week after:
-    // multi-packet vector aggregation could be done using sequence numbers
 
 #else
     // Get the int the worker responded with
@@ -367,9 +366,8 @@ int gather_prog(struct xdp_md* ctx) {
 
 #endif
 
-    AGGREGATION_PROG_OUTRO(resp_msg); 
+    AGGREGATION_PROG_OUTRO(ctx, resp_msg); 
 }
-
 
 // required if we want to get aggregated result using socket read
 // not used by multi-packet messages
@@ -425,21 +423,37 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         return TC_ACT_SHOT;
     }
 
-    struct resp_count* rc = bpf_map_lookup_elem(&map_workers_resp_count, &slot);
-    if (!rc)
-        return TC_ACT_SHOT;
+
+    // Lightweight XDP -> TC communication design pattern: data follows the packet
+    //    set field in XDP for skb, read in TC (data follows the packet)
+    //  atomic add in XDP, read direct from packet
+    __u32* pk_count = (void*)(unsigned long) skb->data_meta;
+    if (pk_count + 1 > (void*)(unsigned long) skb->data) {
+        return TC_ACT_OK;
+    }
 
     // TODO decide how fine-grained this counting should be:
     // - do we care about the count? or should be look at specific workers too?
-
     // if we are doing counting, this should just be replaced with a count variable
     // which is populated in userspace with the number of workers, rather than just
     // iterating over the map
     __u32 num_workers = 0;
     bpf_for_each_map_elem(&map_workers, count_workers, &num_workers, 0);
 
-    bpf_spin_lock(&rc->lock);
-    if (num_workers == rc->count) {
+    // this does not compile? gives LLVM error
+    // __u8 b = __sync_bool_compare_and_swap(&rc->count, num_workers, 0);
+    // __u32 b = __sync_fetch_and_add(&rc->count, num_workers);
+
+    // bpf_printk("Packet count from meta data is %d or %d", skb->mark, );
+
+    // TODO look into completion policy design, over time outs
+    if (num_workers == *pk_count) {
+        
+        // MOVE TO CLEANUP FUNC
+        struct resp_count* rc = bpf_map_lookup_elem(&map_workers_resp_count, &slot);
+        if (!rc)
+            return TC_ACT_SHOT;
+        bpf_spin_lock(&rc->lock);
         rc->count = 0;  // reset immediately to avoid duplicate notifications
         bpf_spin_unlock(&rc->lock);
 
@@ -466,9 +480,6 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         bpf_printk("reset aggregation to 0");
         reset_aggregated_vector(agg_resp);
     } 
-    else {
-        bpf_spin_unlock(&rc->lock);
-    }
 
     /*
     __u8 still_waiting = 0;

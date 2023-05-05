@@ -1,6 +1,8 @@
 #ifndef HELPERS_BPF_H
 #define HELPERS_BPF_H
 
+#pragma clang diagnostic ignored "-Wcompare-distinct-pointer-types"
+
 #include <linux/if_ether.h>
 #include <linux/ip.h>
 #include <linux/udp.h>
@@ -53,7 +55,10 @@ static inline enum xdp_action parse_msg_xdp(struct xdp_md* ctx, sg_msg_t** msg) 
     return XDP_PASS;
 }
 
-static inline enum xdp_action post_aggregation_process(sg_msg_t* resp_msg) {
+static inline enum xdp_action post_aggregation_process(struct xdp_md* ctx, sg_msg_t* resp_msg) {
+    // Set the flag in the payload for the upper layer programs
+    resp_msg->hdr.flags = SG_MSG_F_PROCESSED;
+
     // Increment received packet count for the request
     __u32 slot = GET_REQ_MAP_SLOT(resp_msg->hdr.req_id);
     bpf_printk("Slot for request: %d", slot);
@@ -65,18 +70,23 @@ static inline enum xdp_action post_aggregation_process(sg_msg_t* resp_msg) {
         return XDP_ABORTED;
 
     bpf_spin_lock(&rc->lock);
-    rc->count++;
+    __u32 pk_count = ++rc->count;
     bpf_spin_unlock(&rc->lock);
-    bpf_printk("new count is %d", rc->count);
+    bpf_printk("new count is %d", pk_count);
 
-    // Flag that this worker is completed
-    // worker_resp_status_t updated_status = RECEIVED_RESPONSE; // cannot recycle pointers returned by map lookups!
-    // bpf_map_update_elem(&map_workers_resp_status, &worker, &updated_status, 0);
+    // Device drivers not supporting data_meta will fail here
+    if (bpf_xdp_adjust_meta(ctx, -(int) sizeof(__u32)) < 0)
+        return XDP_ABORTED;
 
-    // Set the flag in the payload for the upper layer programs
-    resp_msg->hdr.flags = SG_MSG_F_PROCESSED;
+    void* data = (void*)(unsigned long) ctx->data;
+    __u32* pk_count_meta;
+    pk_count_meta = (void*)(unsigned long) ctx->data_meta;
+    if (pk_count_meta + 1 > data)
+        return XDP_ABORTED;
+
+    *pk_count_meta = pk_count;
+
     bpf_printk("post aggregation function done");
-
     return XDP_PASS;
 }
 
@@ -90,9 +100,9 @@ static inline enum xdp_action post_aggregation_process(sg_msg_t* resp_msg) {
         return XDP_ABORTED; \
 }
 
-#define AGGREGATION_PROG_OUTRO(resp_msg) { \
+#define AGGREGATION_PROG_OUTRO(ctx, resp_msg) { \
     int act; \
-    if ((act = post_aggregation_process(resp_msg)) != XDP_PASS) \
+    if ((act = post_aggregation_process(ctx, resp_msg)) != XDP_PASS) \
         return act; \
     return XDP_PASS; \
 }

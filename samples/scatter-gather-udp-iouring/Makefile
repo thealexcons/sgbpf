@@ -35,6 +35,8 @@ $(SG_LOADER): sg_loader.cpp
 
 $(BPF_PROG): scatter_gather.bpf.c
 	clang -target bpf -D __BPF_TRACING__ -I$(LIBBPF_HEADERS) -g -Wall -O2 -c $^ -o $@
+	# clang -target bpf -emit-llvm -S -D __BPF_TRACING__ -I$(LIBBPF_HEADERS) -g -Wall -O2 -c $^ -o $@.ll
+	# llc -march=bpf -filetype=obj -o $@ $@.ll
 
 
 $(BPF_AGGREGATION_PROG): aggregation.bpf.c

@@ -39,6 +39,7 @@ int aggregation_prog(struct xdp_md* ctx) {
     // need to discuss event loop in separate thread... if we are using multiple threads
     // it might even be worth looking into the io_uring kernel thread to make zero syscalls
 
+    // TODO: Unify aggregation types for VECTOR and SCALAR data (in common.h)
     //  4. consider ebpf prog vs regular func call for custom aggregation logic
     //      in terms of performance, ease of use, etc.
     //  3. thread-safety in maps and per-request separation of state

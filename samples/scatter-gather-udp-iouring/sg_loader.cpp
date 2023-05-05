@@ -144,13 +144,15 @@ void add_socket_read(struct io_uring *ring, int fd, unsigned gid, size_t message
 }
 
 
-void add_scatter_send(struct io_uring* ring, int skfd, int reqID, sockaddr_in* servAddr, const char* msg, size_t len) {
+void add_scatter_send(struct io_uring* ring, int skfd, int reqID, sockaddr_in* servAddr, const char* msg, size_t len, unsigned char flags, unsigned int num_pks) {
     // Send the message to itself
     sg_msg_t scatter_msg;
     memset(&scatter_msg, 0, sizeof(sg_msg_t));
     scatter_msg.hdr.req_id = reqID;
     scatter_msg.hdr.msg_type = SCATTER_MSG;
     scatter_msg.hdr.body_len = std::min(len, BODY_LEN);
+    scatter_msg.hdr.num_pks = num_pks; 
+    scatter_msg.hdr.flags = flags;
     strncpy(scatter_msg.body, msg, scatter_msg.hdr.body_len);
 
     // this auxilary struct is needed for the sendmsg io_uring operation
@@ -384,7 +386,7 @@ public:
         : d_requestID{requestID}
         , d_workers{workers}
         , d_expectedPacketsPerMessage{numPksPerMsg}
-        , d_status{req_status::ERROR}
+        , d_status{req_status::WAITING}
         , d_timeOut{timeOut}
     {}
 
@@ -420,8 +422,7 @@ protected:
         d_workerBufferPtrs[workerFd].push_back(ptr);
     }
 
-    void start() {
-        d_status = req_status::WAITING;
+    void startTimer() {
         d_startTime = std::chrono::steady_clock::now();
     }
 
@@ -475,15 +476,16 @@ protected:
 
 enum class GatherCompletionPolicy 
 {
-    WaitAll,
-    WaitAny,
-    WaitN
+    WaitAll = SG_MSG_F_WAIT_ALL,
+    WaitAny = SG_MSG_F_WAIT_ANY,
+    WaitN   = SG_MSG_F_WAIT_N
 };
 
 struct RequestParams {
     int                         numPksPerRespMsg = 1;
     std::chrono::microseconds   timeout          = std::chrono::microseconds{50 * 1000};
     GatherCompletionPolicy      completionPolicy = GatherCompletionPolicy::WaitAll;
+    unsigned int                numWorkersToWait = 0;
 
     RequestParams() = default;
 };
@@ -622,6 +624,10 @@ ScatterGatherUDP::~ScatterGatherUDP()
 
 ScatterGatherRequest* ScatterGatherUDP::scatter(const char* msg, size_t len, RequestParams params)
 {
+    if (params.completionPolicy == GatherCompletionPolicy::WaitN && params.numWorkersToWait == 0) {
+        throw std::invalid_argument{"The numWorkersToWait field in RequestParams must be set if using GatherCompletionPolicy::WaitN"};
+    }
+
     // set the POLICY settings in a map for the ebpf program to decide when its done
     // set a timer...
 
@@ -658,7 +664,9 @@ ScatterGatherRequest* ScatterGatherUDP::scatter(const char* msg, size_t len, Req
     // as a pointer into the buffer to read the packet contents.
     req->registerBuffers(&d_ioCtx.ring);
 
-    add_scatter_send(&d_ioCtx.ring, d_scatterSkFd, reqId, &d_scatterSkAddr, msg, len);
+    unsigned char msgFlags = static_cast<int>(params.completionPolicy);
+    uint32_t num_pks = (params.completionPolicy == GatherCompletionPolicy::WaitN) ? params.numWorkersToWait : 0;
+    add_scatter_send(&d_ioCtx.ring, d_scatterSkFd, reqId, &d_scatterSkAddr, msg, len, msgFlags, num_pks);
 
     for (auto w : d_workers) {
         for (auto i = 0u; i < params.numPksPerRespMsg; i++) {
@@ -666,7 +674,7 @@ ScatterGatherRequest* ScatterGatherUDP::scatter(const char* msg, size_t len, Req
         }
     }
     io_uring_submit(&d_ioCtx.ring);
-    req->start();
+    req->startTimer();
 
     return req;
 }
@@ -770,6 +778,8 @@ int main(int argc, char** argv) {
 
     // EXAMPLE 1: Vector-based data (with in-kernel aggregation)
     RequestParams params; // set params here....
+    params.completionPolicy = GatherCompletionPolicy::WaitN;
+    params.numWorkersToWait = 5;
     auto req = sg.scatter("SCATTER", 8, params);
     std::cout << "sent scatter request" << std::endl;
 

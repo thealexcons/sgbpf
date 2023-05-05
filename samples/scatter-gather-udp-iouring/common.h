@@ -29,10 +29,15 @@ typedef struct worker_info {
 
 typedef enum sg_msg_flags 
 {
-    SG_MSG_F_EMPTY = 0,     // No flags
-    SG_MSG_F_PROCESSED,     // The packet has been processed by the gather program
-    SG_MSG_F_LAST_CLONED,   // The last packet of the request, which is cloned
-
+    // Ingress metadata flags
+    SG_MSG_F_EMPTY       = 0,       
+    SG_MSG_F_PROCESSED   = 1 << 0,  // The packet has been processed by the gather program
+    SG_MSG_F_LAST_CLONED = 1 << 1,  // The last packet of the request, which is cloned
+    
+    // Egress configuration flags for the completion policy flags (set in the initial egress scatter message)
+    SG_MSG_F_WAIT_ALL    = 1 << 2,
+    SG_MSG_F_WAIT_ANY    = 1 << 3,
+    SG_MSG_F_WAIT_N      = 1 << 4   // The value of N is given by the num_pks in the egress scatter message (to avoid syscalls)
 } sg_msg_flags_t;
 
 typedef struct __attribute__((packed)) {
@@ -40,7 +45,7 @@ typedef struct __attribute__((packed)) {
     struct __attribute__((packed)) sg_msg_hdr {
         unsigned int    req_id;         // The request ID
         unsigned int    seq_num;        // The sequence number in a multi-packet msg
-        unsigned int    num_pks;        // The number of packets in a multi-packet msg
+        unsigned int    num_pks;        // The number of packets in a multi-packet msg (used as waitN value in egress msg)
         unsigned int    body_len;       // The length of the body in bytes
         unsigned char   msg_type;       // The message type (SCATTER or GATHER)
         unsigned char   flags;          // Extra flags

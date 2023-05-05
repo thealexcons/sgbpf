@@ -151,7 +151,15 @@ int scatter_prog(struct __sk_buff* skb) {
         if (sgh->hdr.msg_type != SCATTER_MSG)
             return TC_ACT_OK;
 
-        bpf_printk("Got SCATTER request");
+        // Configure request settings from the provided flags (completion policy)
+        bpf_printk("Got SCATTER request with flags %d and num_pks %d", sgh->hdr.flags, sgh->hdr.num_pks);
+        if (sgh->hdr.flags & SG_MSG_F_WAIT_ANY) {
+            bpf_printk("Got WAIT_ANY completion policy");
+        } else if (sgh->hdr.flags & SG_MSG_F_WAIT_N) {
+            bpf_printk("Got WAIT_N completion policy with %d workers to wait", sgh->hdr.num_pks);
+        } else {
+            bpf_printk("Got default WAIT_ALL completion policy");
+        }
 
         // start timer for request
         __u32 slot = GET_REQ_MAP_SLOT(sgh->hdr.req_id);

@@ -9,9 +9,9 @@
 
 See appendix 1 in report, but in summary:
 
-1. The following dependencies are needed:
+1. The following dependencies are needed (not `clang+llvm-12` is required):
     ```$ sudo apt-get update```
-    ```$ sudo apt install -y build-essential git make gcc clang llvm libelf-devgcc-multilib```
+    ```$ sudo apt install -y build-essential git make gcc clang-12 llvm-12 libelf-devgcc-multilib```
 
 2. Download the latest copy (or the release of choice) of libbpf :
     ```$ git clone --depth 1 --single-branch --branch master https://github.com/libbpf/libbpf libbpf```

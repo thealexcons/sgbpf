@@ -65,15 +65,17 @@ static inline enum xdp_action post_aggregation_process(struct xdp_md* ctx, sg_ms
 
     // TODO something about this not working when called from custom aggregation program
     // maybe related to tail call issue...
-    struct resp_count* rc = bpf_map_lookup_elem(&map_workers_resp_count, &slot);
-    if (!rc)
+    __u64* count = bpf_map_lookup_elem(&map_workers_resp_count, &slot);
+    if (!count)
         return XDP_ABORTED;
 
-    bpf_spin_lock(&rc->lock);
-    __u32 pk_count = ++rc->count;
-    bpf_spin_unlock(&rc->lock);
+    __u64 pk_count = __atomic_add_fetch(count, 1, __ATOMIC_RELEASE);
     bpf_printk("new count is %d", pk_count);
 
+    // TODO is metadata necessary now? because CAS operation compiles now
+    // resetting vector is necessary anyway, so map access is needed.
+    // probably need to microbenchmark both alternatives
+    /*
     // Device drivers not supporting data_meta will fail here
     if (bpf_xdp_adjust_meta(ctx, -(int) sizeof(__u32)) < 0)
         return XDP_ABORTED;
@@ -85,6 +87,7 @@ static inline enum xdp_action post_aggregation_process(struct xdp_md* ctx, sg_ms
         return XDP_ABORTED;
 
     *pk_count_meta = pk_count;
+    */
 
     bpf_printk("post aggregation function done");
     return XDP_PASS;

@@ -423,40 +423,23 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         return TC_ACT_SHOT;
     }
 
-
     // Lightweight XDP -> TC communication design pattern: data follows the packet
     //    set field in XDP for skb, read in TC (data follows the packet)
     //  atomic add in XDP, read direct from packet
-    __u32* pk_count = (void*)(unsigned long) skb->data_meta;
-    if (pk_count + 1 > (void*)(unsigned long) skb->data) {
-        return TC_ACT_OK;
-    }
+    // __u32* pk_count = (void*)(unsigned long) skb->data_meta;
+    // if (pk_count + 1 > (void*)(unsigned long) skb->data) {
+    //     return TC_ACT_OK;
+    // }
 
-    // TODO decide how fine-grained this counting should be:
-    // - do we care about the count? or should be look at specific workers too?
-    // if we are doing counting, this should just be replaced with a count variable
-    // which is populated in userspace with the number of workers, rather than just
-    // iterating over the map
-    __u32 num_workers = 0;
+    __u64* count = bpf_map_lookup_elem(&map_workers_resp_count, &slot);
+    if (!count)
+        return TC_ACT_SHOT;
+
+    __u64 num_workers = 0;
     bpf_for_each_map_elem(&map_workers, count_workers, &num_workers, 0);
 
-    // this does not compile? gives LLVM error
-    // __u8 b = __sync_bool_compare_and_swap(&rc->count, num_workers, 0);
-    // __u32 b = __sync_fetch_and_add(&rc->count, num_workers);
-
-    // bpf_printk("Packet count from meta data is %d or %d", skb->mark, );
-
     // TODO look into completion policy design, over time outs
-    if (num_workers == *pk_count) {
-        
-        // MOVE TO CLEANUP FUNC
-        struct resp_count* rc = bpf_map_lookup_elem(&map_workers_resp_count, &slot);
-        if (!rc)
-            return TC_ACT_SHOT;
-        bpf_spin_lock(&rc->lock);
-        rc->count = 0;  // reset immediately to avoid duplicate notifications
-        bpf_spin_unlock(&rc->lock);
-
+    if (__atomic_compare_exchange_n(count, &num_workers, 0, 0, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE)) {
         bpf_printk("!!! REQUEST %d COMPLETED, NOTIFYING CTRL SOCKET !!!", resp_msg->hdr.req_id);
 
         __u16* ctrl_sk_port = bpf_map_lookup_elem(&map_gather_ctrl_port, &ZERO_IDX);

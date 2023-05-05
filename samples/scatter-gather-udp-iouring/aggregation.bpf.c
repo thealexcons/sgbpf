@@ -45,7 +45,7 @@ int aggregation_prog(struct xdp_md* ctx) {
     //      Need to get ARRAY_OF_MAPS to work for this
     //  COMPLETION MECHANISM: implement completion conditions for: ALL, ANY, N
     //  TIME OUT MECHANISM: measure in userspace, if timed out, make syscall to
-    //      cleanup state in the ebpf program
+    //      cleanup state in the ebpf program (unoptimised path)
 
     //  5. start thinking about evaluation (see below)
 

@@ -9,8 +9,6 @@
 #include <cassert>
 #include <csignal>
 #include <thread>
-#include <mutex>
-#include <atomic>
 
 #include <arpa/inet.h>
 #include <net/if.h>
@@ -346,7 +344,7 @@ struct IOUringContext
 
 class ScatterGatherUDP;
 
-enum req_status {
+enum class req_status {
     WAITING,
     READY,
     TIMED_OUT,
@@ -364,8 +362,7 @@ private:
     int                     d_requestID;                    // The unique request ID
     std::vector<Worker>     d_workers;
     int                     d_expectedPacketsPerMessage = 1;    // The number of expected packets per response message
-    std::mutex*             d_mutex;
-    std::atomic<uint8_t>    d_status;
+    req_status              d_status;
     std::chrono::microseconds d_timeOut;
     std::chrono::time_point<std::chrono::steady_clock> d_startTime;
 
@@ -383,14 +380,12 @@ public:
     ScatterGatherRequest(int requestID, 
                          std::vector<Worker> workers, 
                          int numPksPerMsg,
-                         std::chrono::microseconds timeOut,
-                         std::mutex* mut)
+                         std::chrono::microseconds timeOut)
         : d_requestID{requestID}
         , d_workers{workers}
         , d_expectedPacketsPerMessage{numPksPerMsg}
         , d_status{req_status::ERROR}
         , d_timeOut{timeOut}
-        , d_mutex{mut}
     {}
 
     int id() const { return d_requestID; }
@@ -403,15 +398,11 @@ public:
     const std::unordered_map<int, std::vector<int>>& bufferPointers() const { return d_workerBufferPtrs; };
 
     bool isReady() const {
-        return d_status.load(std::memory_order_acquire) == req_status::READY;
+        return d_status == req_status::READY;
     }
 
     bool isExpired() const {
-        // NOTE: Using this as a condition in the busy-wait loop is useless because
-        // if the kernel drops the packets on time out, the event loop is not able
-        // to update the status. Hence, the user has to check for time out themselves.
-        // Discussion: is this fine? or should we allow processing in the kernel despite timeout?
-        return d_status.load(std::memory_order_acquire) == req_status::TIMED_OUT;
+        return d_status == req_status::TIMED_OUT;
     }
 
     bool hasTimedOut() const {
@@ -430,7 +421,7 @@ protected:
     }
 
     void start() {
-        d_status.store(req_status::WAITING);
+        d_status = req_status::WAITING;
         d_startTime = std::chrono::steady_clock::now();
     }
 
@@ -439,7 +430,6 @@ protected:
         if (d_expectedPacketsPerMessage == 1)
             return d_workerBufferPtrs.size() == d_workers.size();
 
-        std::scoped_lock lock{*d_mutex};
         int numPacketsReceived = 0;
         for (const auto& [_, ptrs] : d_workerBufferPtrs)
             numPacketsReceived += ptrs.size();
@@ -450,12 +440,12 @@ protected:
     void updateStatus() {
         if (hasTimedOut()) {
             std::cout  << "DEBUGGING: request " << id() << " has timed out!!" << std::endl;
-            d_status.store(req_status::TIMED_OUT, std::memory_order_release);
+            d_status = req_status::TIMED_OUT;
             return;
         }
 
         if (receivedAll()) {
-            d_status.store(req_status::READY, std::memory_order_release);
+            d_status = req_status::READY;
             return;
         }
     }
@@ -500,13 +490,11 @@ private:
     int                     d_ctrlSkFd;     // Gather control socket
     ScatterGatherContext&   d_ctx;
     std::vector<Worker>     d_workers;
-    std::atomic_bool        d_alive;
 
     const uint16_t PORT = 9225;    // just generate and add to map
 
     static uint32_t s_nextRequestID;
 
-    std::mutex                                      d_requestsMutex;
     std::unordered_map<int, ScatterGatherRequest>   d_activeRequests;
 
     // IO uring
@@ -526,9 +514,14 @@ public:
 
     int ctrlSkFd() const { return d_ctrlSkFd; }
 
+    void processEvents();
+
+    void processRequestEvents(int requestID);
+
 private:
 
-    void eventLoop();
+    constexpr static const int DEFAULT_REQUEST_ID = -1;
+    void processPendingEvents(int requestID = DEFAULT_REQUEST_ID);
 
     // Helpers
     std::pair<int, uint16_t> openWorkerSocket();
@@ -591,11 +584,6 @@ ScatterGatherUDP::ScatterGatherUDP(ScatterGatherContext& ctx,
     d_scatterSkAddr.sin_addr.s_addr = INADDR_ANY;
     if (bind(d_scatterSkFd, (const struct sockaddr *) &d_scatterSkAddr, sizeof(sockaddr_in)) < 0)
         throw std::runtime_error{"Failed bind() on scatter socket"};
-
-    // Start the background event loop thread
-    d_alive = true;
-    std::thread bg{&ScatterGatherUDP::eventLoop, this};
-    bg.detach();
 }
 
 std::pair<int, uint16_t> ScatterGatherUDP::openWorkerSocket() {
@@ -621,7 +609,6 @@ ScatterGatherUDP::~ScatterGatherUDP()
 {
     // TODO rather than opening and closing a socket every time, we could keep
     // a global pool of reusable sockets to avoid this on every invokation of the primitive
-    d_alive = false;
     close(d_scatterSkFd);
     close(d_ctrlSkFd);
     for (auto w : d_workers)
@@ -641,18 +628,16 @@ ScatterGatherRequest* ScatterGatherUDP::scatter(const char* msg, size_t len, int
 
     // if this is less than the actual num of pks, another syscall
     // is required to submit the remaining socket read operations
-    // numPksPerRespMsg = 10;  
+    numPksPerRespMsg = 5;
 
     int reqId = s_nextRequestID++;
     ScatterGatherRequest* req = nullptr;
     {
-        std::scoped_lock lock{d_requestsMutex};
-
         // TODO: this can be a fixed size array because we have a limit
         // on the maximum number of active requests
         d_activeRequests.emplace(std::piecewise_construct,
              std::forward_as_tuple(reqId),
-             std::forward_as_tuple(reqId, d_workers, numPksPerRespMsg, timeout, &d_requestsMutex)
+             std::forward_as_tuple(reqId, d_workers, numPksPerRespMsg, timeout)
         );
 
         req = &d_activeRequests[reqId];
@@ -670,7 +655,7 @@ ScatterGatherRequest* ScatterGatherUDP::scatter(const char* msg, size_t len, int
     // the buffers are populated automatically using "automatic buffer selection".
     // Each request defines a group of buffers (hence the group buffer ID is equivalent
     // to the request ID) and the buffer ID is automatically set by io_uring and obtained
-    // in the event loop thread, which saves this ID so it can be used by the developer
+    // in the completion queue. This ID can be used by the developer
     // as a pointer into the buffer to read the packet contents.
     req->registerBuffers(&d_ioCtx.ring);
 
@@ -684,8 +669,6 @@ ScatterGatherRequest* ScatterGatherUDP::scatter(const char* msg, size_t len, int
     io_uring_submit(&d_ioCtx.ring);
     req->start();
 
-    print_sq_poll_kernel_thread_status();
-
     return req;
 }
 
@@ -695,80 +678,83 @@ ScatterGatherRequest* ScatterGatherUDP::scatter(const std::string& msg, int numP
     return scatter(msg.c_str(), len, numPksPerRespMsg);
 }
 
-void ScatterGatherUDP::eventLoop()
-{
-    // io_uring event loop in background thread
-    // this thread will keep track of the pointers to the packet buffers which
-    // are received for all requests
-    while (d_alive) {
-        io_uring_cqe *cqe;
-        unsigned count = 0;
-        unsigned head;
-        bool submitPendingReads = false;
+void ScatterGatherUDP::processEvents() {
+    processPendingEvents(DEFAULT_REQUEST_ID);
+}
 
-        io_uring_for_each_cqe(&d_ioCtx.ring, head, cqe) {
-            ++count;
-            const auto conn_i = reinterpret_cast<conn_info*>(&cqe->user_data);
+void ScatterGatherUDP::processRequestEvents(int requestID) {
+    assert(requestID > DEFAULT_REQUEST_ID);
+    processPendingEvents(requestID);
+}
 
-            if (cqe->res == -ENOBUFS) {
-                // NOTIFY USER THAT WE ARE OUT OF SPACE
-                fprintf(stdout, "bufs in automatic buffer selection empty, this should not happen...\n");
-                fflush(stdout);
-                exit(1);
-            }
-            
-            if (conn_i->type == IO_READ) {
-                if (cqe->res <= 0) {
-                    close(conn_i->fd);
-                } else {
-                    auto reqId = conn_i->bgid; // the packet's request ID
-                    auto buffIdx = cqe->flags >> 16; // the packet's buffer index
+void ScatterGatherUDP::processPendingEvents(int requestID) {
+    bool processOnlyGivenReq = (requestID != DEFAULT_REQUEST_ID);
 
-                    std::scoped_lock lock{d_requestsMutex};
+    io_uring_cqe *cqe;
+    unsigned count = 0;
+    unsigned head;
+    bool submitPendingReads = false;
 
-                    auto& req = d_activeRequests[reqId]; // get the associated request
-                    if (req.hasTimedOut()) {
-                        req.updateStatus();
-                        continue;
-                    }
+    io_uring_for_each_cqe(&d_ioCtx.ring, head, cqe) {
+        ++count;
+        const auto conn_i = reinterpret_cast<conn_info*>(&cqe->user_data);
 
-                    auto resp = (sg_msg_t*) req.data(buffIdx);
-                    if (resp->hdr.req_id != req.id()) {
-                        continue; // drop old or invalid packet
-                    }
-                    std::cout << "Got pk " << conn_i->fd << " for req " << req.id() << std::endl;
-                    req.addBufferPtr(conn_i->fd, buffIdx);
-                    req.updateStatus();
+        if (cqe->res == -ENOBUFS) {
+            // NOTIFY USER THAT WE ARE OUT OF SPACE
+            fprintf(stdout, "bufs in automatic buffer selection empty, this should not happen...\n");
+            fflush(stdout);
+            exit(1);
+        }
+        
+        if (conn_i->type == IO_READ) {
+            if (cqe->res <= 0) {
+                close(conn_i->fd);
+            } else {
+                auto reqId = conn_i->bgid;           // the packet's request ID
+                auto buffIdx = cqe->flags >> 16;     // the packet's buffer index
+                auto& req = d_activeRequests[reqId]; // get the associated request
+                const auto resp = (sg_msg_t*) req.data(buffIdx);
 
-                    // check for multi-packet message and add more reads if necessary
-                    if (req.d_expectedPacketsPerMessage != resp->hdr.num_pks && resp->hdr.num_pks > 1) {
-                        req.d_expectedPacketsPerMessage = resp->hdr.num_pks;                       
-                    }
-
-                    int remaining = 0;
-                    for (const auto& [wfd, ptrs] : req.d_workerBufferPtrs) {
-                        auto pksRemainingForThisWorker = abs(req.d_expectedPacketsPerMessage - ptrs.size());
-                        if (pksRemainingForThisWorker > 0) {
-                            remaining += pksRemainingForThisWorker;
-
-                            // Add the remaining socket read operations to the SQ
-                            for (auto i = 0; i < pksRemainingForThisWorker; i++)
-                                add_socket_read(&d_ioCtx.ring, wfd, req.id(), IOUringContext::MaxBufferSize, IOSQE_BUFFER_SELECT);
-                        }
-                    }
-                    submitPendingReads = (remaining > 0);
+                // If we are only processing packets for a given request
+                if (processOnlyGivenReq && resp->hdr.req_id != req.id()) {
+                    continue;
                 }
+
+                if (req.hasTimedOut()) {
+                    req.updateStatus();
+                    continue;
+                }
+                
+                std::cout << "Got pk " << conn_i->fd << " for req " << req.id() << std::endl;
+                req.addBufferPtr(conn_i->fd, buffIdx);
+                req.updateStatus();
+
+                // check for multi-packet message and add more reads if necessary
+                if (req.d_expectedPacketsPerMessage != resp->hdr.num_pks && resp->hdr.num_pks > 1) {
+                    req.d_expectedPacketsPerMessage = resp->hdr.num_pks;                       
+                }
+
+                int remaining = 0;
+                for (const auto& [wfd, ptrs] : req.d_workerBufferPtrs) {
+                    auto pksRemainingForThisWorker = abs(req.d_expectedPacketsPerMessage - ptrs.size());
+                    if (pksRemainingForThisWorker > 0) {
+                        remaining += pksRemainingForThisWorker;
+
+                        // Add the remaining socket read operations to the SQ
+                        for (auto i = 0; i < pksRemainingForThisWorker; i++)
+                            add_socket_read(&d_ioCtx.ring, wfd, req.id(), IOUringContext::MaxBufferSize, IOSQE_BUFFER_SELECT);
+                    }
+                }
+                submitPendingReads = (remaining > 0);
             }
         }
-        io_uring_cq_advance(&d_ioCtx.ring, count);
+    }
+    io_uring_cq_advance(&d_ioCtx.ring, count);
 
-        if (submitPendingReads) {
-            std::cout << "submit from event loop" << std::endl;
-            io_uring_submit(&d_ioCtx.ring);
-            submitPendingReads = false;
-        }
-
-        // keep spinning... 
+    if (submitPendingReads) {
+        std::cout << "submitting pending reads from event loop (mistmatch in expected number of packets in resp)" << std::endl;
+        io_uring_submit(&d_ioCtx.ring);
+        submitPendingReads = false;
     }
 }
 
@@ -786,21 +772,14 @@ int main(int argc, char** argv) {
     ScatterGatherUDP sg{ctx, workers};
 
     // User can configure the ctrl socket as they wish, eg: set non blocking flag
-    int flags = fcntl(sg.ctrlSkFd(), F_GETFL, 0);
-    fcntl(sg.ctrlSkFd(), F_SETFL, flags | O_NONBLOCK);
+    // int flags = fcntl(sg.ctrlSkFd(), F_GETFL, 0);
+    // fcntl(sg.ctrlSkFd(), F_SETFL, flags | O_NONBLOCK);
 
-
+    // EXAMPLE 1: Vector-based data (with in-kernel aggregation)
     auto req = sg.scatter("SCATTER");
-    std::cout << "sent scatter" << std::endl;
+    std::cout << "sent scatter request" << std::endl;
 
-    // Read the ctrl socket with the aggregated value
-    // while (!req->isReady() && !req->hasTimedOut()) {}
-    // // wait until the request has finished, to avoid blocking on the read syscall
-    // if (req->hasTimedOut()) {
-    //     std::cout << "Request timed out :(" << std::endl;
-    //     return 0;
-    // }
-
+    // Wait on the ctrl socket to finish
     sg_msg_t buf;
     auto b = read(sg.ctrlSkFd(), &buf, sizeof(sg_msg_t));
     assert(b == sizeof(sg_msg_t));
@@ -809,11 +788,11 @@ int main(int argc, char** argv) {
     assert(buf.hdr.req_id == req->id());
 
     // Process the completed events in the io_uring queue
-    // To be called periodically or directly after an event on the ctrl sk
-    // sg.poll();
-    // sg.pollRequest(id);
     // decouple threading model from library
+    // To be called periodically or directly after an event on the ctrl sk
 
+    sg.processEvents(); // or alternatively: sg.processRequestEvents(req->id());
+    
     auto aggregatedData = (uint32_t*)(buf.body);
     std::cout << "control socket packet received\n";
     for (auto i = 0u; i < RESP_MAX_VECTOR_SIZE; i++) {
@@ -822,38 +801,38 @@ int main(int argc, char** argv) {
     }
 
     std::cout << "Got a total of " << req->bufferPointers().size() << std::endl;
+    
+
+    // ASSUMPTION: the number of packets in the response message must be specified
+    // in advance if calling processEvents() AFTER the ctrl sk event. Otherwise,
+    // a separate thread is needed to periodically call processEvents() to submit
+    // any remaining read operations to the IO event queue (io_uring).
+
+    // ASSUMPTION 2: for multi-packet aggregation, this must be done in userspace
+    // and there is no notification to the ctrl socket. Therefore, the user must
+    // periodically call processEvents() and wait until all packets have arrived.
+    // One way to do this is to call processEvents() while waiting under req->isReady();
 
 
-    // Can also get the individual workers
+    // EXAMPLE TWO: multi-packet response, with userspace aggregation over individual packets
     // this is useful for multi-packet responses, so the user can perform the aggregation
     // themselves in user-space
-    // for (const auto& w : req->workers()) {
-    //     auto buffIdxs = req->bufferPointers().at(w.socketFd());
-    //     std::cout << "Num packets received: " << buffIdxs.size() << std::endl;
-        
-    //     for (auto buffIdx : buffIdxs) {
-    //         auto pk = (sg_msg_t*) req->data(buffIdx);
-    //         std::cout << "Pk: " << buffIdx << " - " << ((uint32_t*)(pk->body)) << std::endl;
-    //     }
-
-    //     // std::cout << "[ReqID = " << req->id() << "] seq_num = " << pk->hdr.req_id << " - "
-    //     //           << "Worker " << w.port() << " (fd = " << w.socketFd() 
-    //     //           << ") with buffIdx[0] " << buffIdxs[0] << std::endl;
-
-    // }
-
-/*
     auto req2 = sg.scatter("SCATTER");
-    std::cout << "\nSENT SECOND REQUEST " << std::endl;
 
-    while (!req2->isReady() && !req2->hasTimedOut()) {}
-    if (req2->hasTimedOut()) {
-        std::cout << "Request timed out :(" << std::endl;
-        return 0;
+    while (!req2->isReady()) {
+        // Because we have no notification on the ctrl socket in this case, we must
+        // manually check whether we have received the packets by periodically calling
+        // the process function
+        sg.processRequestEvents(req2->id());
     }
-    read(sg.ctrlSkFd(), &buf, sizeof(sg_msg_t));
-    std::cout << buf.hdr.req_id << std::endl;
-    aggregatedData = (uint32_t*)(buf.body);
-    std::cout << "Got req2 response, example: vec[33] = " << aggregatedData[33] << std::endl;
-*/
+
+    for (const auto& w : req2->workers()) {
+        auto buffIdxs = req2->bufferPointers().at(w.socketFd());
+        std::cout << "Num packets received: " << buffIdxs.size() << std::endl;
+        
+        for (auto buffIdx : buffIdxs) {
+            auto pk = (sg_msg_t*) req2->data(buffIdx);
+            std::cout << "Pk: " << buffIdx << " - " << ((uint32_t*)(pk->body)) << std::endl;
+        }
+    }
 }

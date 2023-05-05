@@ -628,8 +628,13 @@ ScatterGatherRequest* ScatterGatherUDP::scatter(const char* msg, size_t len, Req
         throw std::invalid_argument{"The numWorkersToWait field in RequestParams must be set if using GatherCompletionPolicy::WaitN"};
     }
 
-    // set the POLICY settings in a map for the ebpf program to decide when its done
-    // set a timer...
+    unsigned char msgFlags = static_cast<int>(params.completionPolicy);
+    uint32_t num_pks = 0; // the num of workers to wait for
+    if (params.completionPolicy == GatherCompletionPolicy::WaitN) {
+        num_pks = params.numWorkersToWait;
+    } else if (params.completionPolicy == GatherCompletionPolicy::WaitAll) {
+        num_pks = d_workers.size();
+    }
 
     // if this is less than the actual num of pks, another syscall
     // is required to submit the remaining socket read operations
@@ -637,22 +642,20 @@ ScatterGatherRequest* ScatterGatherUDP::scatter(const char* msg, size_t len, Req
 
     int reqId = s_nextRequestID++;
     ScatterGatherRequest* req = nullptr;
-    {
-        // TODO: this can be a fixed size array because we have a limit
-        // on the maximum number of active requests
-        d_activeRequests.emplace(std::piecewise_construct,
-             std::forward_as_tuple(reqId),
-             std::forward_as_tuple(reqId, d_workers, params.numPksPerRespMsg, params.timeout)
-        );
+    // TODO: this can be a fixed size array because we have a limit
+    // on the maximum number of active requests
+    d_activeRequests.emplace(std::piecewise_construct,
+            std::forward_as_tuple(reqId),
+            std::forward_as_tuple(reqId, d_workers, params.numPksPerRespMsg, params.timeout)
+    );
 
-        req = &d_activeRequests[reqId];
-        // TODO need a garbage collection mechanism to free the memory used
-        // by cancelled and old requests
-        // How to handle this?? buffers can be recycled by submitting another provide_buffers
-        // or can be freed by submitting remove_buffers ... 
-        // when a request is considered done, call req->freeBuffers(&d_ioCtx.ring);
-        // in destructor?? or manually?
-    }
+    req = &d_activeRequests[reqId];
+    // TODO need a garbage collection mechanism to free the memory used
+    // by cancelled and old requests
+    // How to handle this?? buffers can be recycled by submitting another provide_buffers
+    // or can be freed by submitting remove_buffers ... 
+    // when a request is considered done, call req->freeBuffers(&d_ioCtx.ring);
+    // in destructor?? or manually?
 
     // Register response packet buffers for this SG request
     // Every ScatterGatherRequest instance allocates a set of buffers to store the
@@ -664,8 +667,6 @@ ScatterGatherRequest* ScatterGatherUDP::scatter(const char* msg, size_t len, Req
     // as a pointer into the buffer to read the packet contents.
     req->registerBuffers(&d_ioCtx.ring);
 
-    unsigned char msgFlags = static_cast<int>(params.completionPolicy);
-    uint32_t num_pks = (params.completionPolicy == GatherCompletionPolicy::WaitN) ? params.numWorkersToWait : 0;
     add_scatter_send(&d_ioCtx.ring, d_scatterSkFd, reqId, &d_scatterSkAddr, msg, len, msgFlags, num_pks);
 
     for (auto w : d_workers) {
@@ -779,7 +780,7 @@ int main(int argc, char** argv) {
     // EXAMPLE 1: Vector-based data (with in-kernel aggregation)
     RequestParams params; // set params here....
     params.completionPolicy = GatherCompletionPolicy::WaitN;
-    params.numWorkersToWait = 5;
+    params.numWorkersToWait = 10;
     auto req = sg.scatter("SCATTER", 8, params);
     std::cout << "sent scatter request" << std::endl;
 
@@ -795,6 +796,9 @@ int main(int argc, char** argv) {
     // decouple threading model from library
     // To be called periodically or directly after an event on the ctrl sk
 
+    // TODO processEvents may process more packets than those reflected in the aggregated
+    // value returned by the ctrl sk (ie: aggregates 2 pks, but the 3rd pk arrives later
+    // and is captured by processEvents(). need a way to synchronise this?????)
     sg.processEvents(); // or alternatively: sg.processRequestEvents(req->id());
     
     auto aggregatedData = (uint32_t*)(buf.body);
@@ -824,6 +828,8 @@ int main(int argc, char** argv) {
     auto req2 = sg.scatter("SCATTER", 8);
 
     while (!req2->isReady()) {
+        // TODO Update isReady to take into custom waitN completion policies
+
         // Because we have no notification on the ctrl socket in this case, we must
         // manually check whether we have received the packets by periodically calling
         // the process function

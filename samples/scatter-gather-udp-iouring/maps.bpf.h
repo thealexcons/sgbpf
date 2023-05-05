@@ -67,6 +67,20 @@ struct {
 } map_req_timing SEC(".maps");
 
 
+// consider handling all per-request maps together???
+struct completion_policy_info {
+    sg_msg_flags_t  policy;
+    __u32           waitN;
+};
+
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __type(key, __u32);
+    __type(value, struct completion_policy_info);
+    __uint(max_entries, MAX_ACTIVE_REQUESTS_ALLOWED);
+    __uint(pinning, LIBBPF_PIN_BY_NAME);
+} map_req_completion_policy SEC(".maps");
+
 // Stores the number of packets received for each request ID
 
 struct {
@@ -94,5 +108,8 @@ struct {
 
 // FOr multi-packet vector aggregation, extra layer of indirection is needed
 // to store MAX_PACKETS * DATA_ARRAY per request
+
+// To unpin a map with the pinning field set, do:
+// sudo rm /sys/fs/bpf/<map_name>
 
 #endif // MAPS_BPF_H

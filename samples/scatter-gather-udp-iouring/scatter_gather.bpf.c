@@ -133,8 +133,6 @@ int scatter_prog(struct __sk_buff* skb) {
     if (udph->dest == udph->source && udph->source == *local_application_port) {
         
         __u32 payload_size = bpf_ntohs(udph->len) - sizeof(struct udphdr);
-        bpf_printk("payload size: %d   sizeof(sg_msg_t) = %d", payload_size, sizeof(sg_msg_t));
-
         // Note: this equality is needed so that the comparison size is known
         // at compile-time for the loop unrolling.
         if (payload_size != sizeof(sg_msg_t))
@@ -152,23 +150,41 @@ int scatter_prog(struct __sk_buff* skb) {
             return TC_ACT_OK;
 
         // Configure request settings from the provided flags (completion policy)
-        bpf_printk("Got SCATTER request with flags %d and num_pks %d", sgh->hdr.flags, sgh->hdr.num_pks);
-        if (sgh->hdr.flags & SG_MSG_F_WAIT_ANY) {
+        bpf_printk("Got SCATTER request");
+
+        __u32 slot = GET_REQ_MAP_SLOT(sgh->hdr.req_id);
+
+        struct completion_policy_info* cpi = bpf_map_lookup_elem(&map_req_completion_policy, &slot);
+        if (!cpi)
+            return XDP_ABORTED;
+
+        // Lazy cleanup of map entry if previous entry used the SG_MSG_F_WAIT_ANY policy
+        // if (__glibc_unlikely(cpi->policy == SG_MSG_F_WAIT_ANY)) {
+        //     __u64* count = bpf_map_lookup_elem(&map_workers_resp_count, &slot);
+        //     if (!count)
+        //         return XDP_ABORTED;
+        //     *count = 0; // UB if num active requests > MAX_ACTIVE_REQUESTS
+        // }
+        cpi->policy = sgh->hdr.flags;
+        cpi->waitN = (sgh->hdr.flags == SG_MSG_F_WAIT_N || sgh->hdr.flags == SG_MSG_F_WAIT_ALL) ? sgh->hdr.num_pks : 0;
+
+        if (sgh->hdr.flags == SG_MSG_F_WAIT_ANY) {
             bpf_printk("Got WAIT_ANY completion policy");
-        } else if (sgh->hdr.flags & SG_MSG_F_WAIT_N) {
+        } else if (sgh->hdr.flags == SG_MSG_F_WAIT_N) {
             bpf_printk("Got WAIT_N completion policy with %d workers to wait", sgh->hdr.num_pks);
         } else {
             bpf_printk("Got default WAIT_ALL completion policy");
         }
 
         // start timer for request
-        __u32 slot = GET_REQ_MAP_SLOT(sgh->hdr.req_id);
+        /*
         struct req_timing* rqt = bpf_map_lookup_elem(&map_req_timing, &slot);
         if (!rqt)
             return TC_ACT_OK;
 
         rqt->start_ns = bpf_ktime_get_ns();
         rqt->timeout_ns = 10 * 1000000; // default timeout of 10ms
+        */
         // Instead of using a syscall to set the timeout for each request, maybe
         // include the timeout value (in micros or millis) in the header when sent out
 
@@ -208,13 +224,13 @@ int scatter_prog(struct __sk_buff* skb) {
 //     return *waiting ? 1 : 0;
 // }
 
-static __u64 count_workers(void* map, __u32* idx, worker_info_t* worker, __u32* count) {
-    if (!worker || worker->app_port == 0)
-        return 1;
+// static __u64 count_workers(void* map, __u32* idx, worker_info_t* worker, __u32* count) {
+//     if (!worker || worker->app_port == 0)
+//         return 1;
 
-    (*count)++;
-    return 0;
-}
+//     (*count)++;
+//     return 0;
+// }
 
 // static __u64 reset_worker_status(void* map, worker_info_t* worker, worker_resp_status_t* status, __u8* waiting) {
 //     if (!status)
@@ -225,28 +241,27 @@ static __u64 count_workers(void* map, __u32* idx, worker_info_t* worker, __u32* 
 //     return 0;
 // }
 
+// inline static void cleanup_request_state(__u32 reqId) {
+//     // TODO cleanup all state for the given request
+// }
+
+// // TODO have time out check in userspace, if timed out, invoke syscall to cleanup
+// inline static __u8 request_timed_out(struct req_timing* rqt) {
+//     return (bpf_ktime_get_ns() - rqt->start_ns > rqt->timeout_ns);
+// } 
+
 inline static void reset_aggregated_vector(RESP_VECTOR_TYPE* agg_vector) {
     // ebpf sets a maximum size for memset, so we need to "hack" around it
     #define MAX_CONTIGUOUS_MEMSET_SIZE 256
 
     #pragma clang loop unroll(full)
     for (__u32 i = 0; i < RESP_MAX_VECTOR_SIZE; ++i) {
-        if (MOD_POW2(i, MAX_CONTIGUOUS_MEMSET_SIZE) == 0) {
+        if (__glibc_unlikely(MOD_POW2(i, MAX_CONTIGUOUS_MEMSET_SIZE) == 0)) {
             barrier(); // dummy instruction needed to break the memset, need something cheap
         }
         agg_vector[i] = 0;
     }
 }
-
-inline static void cleanup_request_state(__u32 reqId) {
-    // TODO cleanup all state for the given request
-}
-
-// TODO have time out check in userspace, if timed out, invoke syscall to cleanup
-inline static __u8 request_timed_out(struct req_timing* rqt) {
-    return (bpf_ktime_get_ns() - rqt->start_ns > rqt->timeout_ns);
-} 
-
 
 SEC("xdp")
 int gather_prog(struct xdp_md* ctx) {
@@ -306,6 +321,7 @@ int gather_prog(struct xdp_md* ctx) {
         return XDP_DROP;
 
     // Check for time-out
+    /*
     __u32 slot = GET_REQ_MAP_SLOT(resp_msg->hdr.req_id);
     struct req_timing* rqt = bpf_map_lookup_elem(&map_req_timing, &slot);
     if (!rqt)
@@ -316,7 +332,7 @@ int gather_prog(struct xdp_md* ctx) {
         cleanup_request_state(resp_msg->hdr.req_id); // or just pass in the map ptrs directly
         bpf_printk("Request %d timed out!!!!", resp_msg->hdr.req_id);
         return XDP_DROP;
-    }
+    }*/
 
     // If this is a multi-packet message, forward the packet without aggregation
     if (resp_msg->hdr.num_pks > 1 && resp_msg->hdr.seq_num <= resp_msg->hdr.num_pks) {
@@ -377,6 +393,42 @@ int gather_prog(struct xdp_md* ctx) {
     AGGREGATION_PROG_OUTRO(ctx, resp_msg); 
 }
 
+#define ATOMIC_LOAD_HACK(ptr, dest) asm volatile("lock *(u64 *)(%0+0) += %1" : "=r"(dest) : "r"(ZERO_IDX), "0"(ptr));
+
+static inline __u8 num_workers_satisfied(__u64* count, struct completion_policy_info* cpi) {
+    // Note: if the function returns true, the value at count will atomically be 
+    // reset to zero too, EXCEPT if the policy is SG_MSG_F_WAIT_ANY. Hence the lazy
+    // cleanup in the scatter program
+
+    // Getting to this implies at least one packet has arrived, so WAIT_ANY is always satisfied
+    if (cpi->policy == SG_MSG_F_WAIT_ANY) {
+        __atomic_exchange_n(count, 0, __ATOMIC_ACQ_REL);
+        return 1;
+    }
+    // __sync_store_n(count, 0, __ATOMIC_RELEASE);
+    // supported atomic ops in ebpf:
+    // https://patchwork.ozlabs.org/project/gcc/patch/20211026122539.186747-1-guillermo.e.martinez@oracle.com/
+
+    __u64 num_workers = cpi->waitN;
+    if (cpi->policy == SG_MSG_F_WAIT_ALL) {
+        return __atomic_compare_exchange_n(count, &num_workers, 0, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+    }
+    else if (cpi->policy == SG_MSG_F_WAIT_N) {
+        // check >= num_workers
+        // Do we drop any packets after the nth? ask marios
+        // might be able to do this using per-packet metadata and marking their count
+
+        // This is not in a CAS loop, as it is sufficient to check for stale values
+        // since the count is monotonically increasing throughout the request lifetime
+        __u64* c;
+        ATOMIC_LOAD_HACK(count, c);
+        if (*c >= num_workers)
+            __atomic_exchange_n(count, 0, __ATOMIC_ACQ_REL);
+        return 1;
+    }
+    return 0;
+}
+
 // required if we want to get aggregated result using socket read
 // not used by multi-packet messages
 SEC("tc")
@@ -421,6 +473,8 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
 
     // Check for time-out
     __u32 slot = GET_REQ_MAP_SLOT(resp_msg->hdr.req_id);
+    
+    /*
     struct req_timing* rqt = bpf_map_lookup_elem(&map_req_timing, &slot);
     if (!rqt)
         return TC_ACT_OK;
@@ -430,6 +484,7 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         bpf_printk("Request %d timed out!!!!", resp_msg->hdr.req_id);
         return TC_ACT_SHOT;
     }
+    */
 
     // Lightweight XDP -> TC communication design pattern: data follows the packet
     //    set field in XDP for skb, read in TC (data follows the packet)
@@ -438,16 +493,16 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
     // if (pk_count + 1 > (void*)(unsigned long) skb->data) {
     //     return TC_ACT_OK;
     // }
+    struct completion_policy_info* cpi = bpf_map_lookup_elem(&map_req_completion_policy, &slot);
+    if (!cpi)
+        return TC_ACT_SHOT;
 
     __u64* count = bpf_map_lookup_elem(&map_workers_resp_count, &slot);
     if (!count)
         return TC_ACT_SHOT;
 
-    __u64 num_workers = 0;
-    bpf_for_each_map_elem(&map_workers, count_workers, &num_workers, 0);
-
-    // TODO look into completion policy design, over time outs
-    if (__atomic_compare_exchange_n(count, &num_workers, 0, 0, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE)) {
+    // Check completion satisfied
+    if (num_workers_satisfied(count, cpi)) {
         bpf_printk("!!! REQUEST %d COMPLETED, NOTIFYING CTRL SOCKET !!!", resp_msg->hdr.req_id);
 
         __u16* ctrl_sk_port = bpf_map_lookup_elem(&map_gather_ctrl_port, &ZERO_IDX);
@@ -473,35 +528,7 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         // NOTE: alternatively, we could consider a lazy cleanup: cleanup the resources
         // for a request when a new request is launched and is meant to take the old request's place
         reset_aggregated_vector(agg_resp);
-    } 
-
-    /*
-    __u8 still_waiting = 0;
-    bpf_for_each_map_elem(&map_workers_resp_status, check_worker_status, &still_waiting, 0);
-
-    if (!still_waiting) { 
-        bpf_printk("!!!!!!!!!!!! NOTIFYING CTRL SOCKET !!!!!!!!!!!!!!!11");       
-        __u16* ctrl_sk_port = bpf_map_lookup_elem(&map_gather_ctrl_port, &ZERO_IDX);
-        if (!ctrl_sk_port)
-            return TC_ACT_SHOT;
-        
-        // Send the incoming packet to the final worker
-        bpf_clone_redirect(skb, skb->ifindex, 0);
-
-        // Notify the control socket with the final aggregated value
-        RESP_AGGREGATION_TYPE* agg_resp = bpf_map_lookup_elem(&map_aggregated_response, &ZERO_IDX);
-        if (!agg_resp)
-            return TC_ACT_SHOT;
-
-        RESP_AGGREGATION_TYPE agg_resp_val = bpf_htonl(*agg_resp);  // conversion not strictly needed, as long as app reads in correct form
-        unsigned offset = ETH_HLEN + sizeof(struct iphdr) + sizeof(struct udphdr) + offsetof(sg_msg_t, body);
-        bpf_skb_store_bytes(skb, offset, &agg_resp_val, sizeof(agg_resp_val), BPF_F_RECOMPUTE_CSUM);
-        bpf_skb_store_bytes(skb, UDP_DEST_OFF, ctrl_sk_port, sizeof(*ctrl_sk_port), BPF_F_RECOMPUTE_CSUM);
-        
-        // RESET
-        bpf_for_each_map_elem(&map_workers_resp_status, reset_worker_status, &still_waiting, 0);
     }
-    */
 
     return TC_ACT_OK;
 }

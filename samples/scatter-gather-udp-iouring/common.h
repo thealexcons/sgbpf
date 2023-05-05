@@ -29,15 +29,17 @@ typedef struct worker_info {
 
 typedef enum sg_msg_flags 
 {
-    // Ingress metadata flags
     SG_MSG_F_EMPTY       = 0,       
-    SG_MSG_F_PROCESSED   = 1 << 0,  // The packet has been processed by the gather program
-    SG_MSG_F_LAST_CLONED = 1 << 1,  // The last packet of the request, which is cloned
-    
+
     // Egress configuration flags for the completion policy flags (set in the initial egress scatter message)
-    SG_MSG_F_WAIT_ALL    = 1 << 2,
-    SG_MSG_F_WAIT_ANY    = 1 << 3,
-    SG_MSG_F_WAIT_N      = 1 << 4   // The value of N is given by the num_pks in the egress scatter message (to avoid syscalls)
+    SG_MSG_F_WAIT_ALL    = 1 << 0,
+    SG_MSG_F_WAIT_ANY    = 1 << 1,
+    SG_MSG_F_WAIT_N      = 1 << 2,  // The value of N is given by the num_pks in the egress scatter message (to avoid syscalls)
+
+    // Ingress metadata flags (non-overlapping with egress flags)
+    SG_MSG_F_PROCESSED,     // The packet has been processed by the gather program
+    SG_MSG_F_LAST_CLONED,   // The last packet of the request, which is cloned
+    
 } sg_msg_flags_t;
 
 typedef struct __attribute__((packed)) {

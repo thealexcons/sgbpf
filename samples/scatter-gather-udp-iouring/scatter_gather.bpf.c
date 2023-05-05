@@ -461,6 +461,9 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
 
         // Reset the aggregated vector from this request
         bpf_printk("reset aggregation to 0");
+
+        // NOTE: alternatively, we could consider a lazy cleanup: cleanup the resources
+        // for a request when a new request is launched and is meant to take the old request's place
         reset_aggregated_vector(agg_resp);
     } 
 

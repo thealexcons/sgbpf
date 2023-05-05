@@ -480,6 +480,13 @@ enum class GatherCompletionPolicy
     WaitN
 };
 
+struct RequestParams {
+    int                         numPksPerRespMsg = 1;
+    std::chrono::microseconds   timeout          = std::chrono::microseconds{50 * 1000};
+    GatherCompletionPolicy      completionPolicy = GatherCompletionPolicy::WaitAll;
+
+    RequestParams() = default;
+};
 
 class ScatterGatherUDP 
 {
@@ -507,10 +514,7 @@ public:
 
     ~ScatterGatherUDP();
 
-    template <typename TIMEOUT_UNITS = std::chrono::microseconds,
-              GatherCompletionPolicy POLICY = GatherCompletionPolicy::WaitAll>
-    ScatterGatherRequest* scatter(const char* msg, size_t len, int numPksPerRespMsg = 1);
-    ScatterGatherRequest* scatter(const std::string& msg, int numPksPerRespMsg = 1);
+    ScatterGatherRequest* scatter(const char* msg, size_t len, RequestParams params = {});
 
     int ctrlSkFd() const { return d_ctrlSkFd; }
 
@@ -616,19 +620,14 @@ ScatterGatherUDP::~ScatterGatherUDP()
 }
 
 
-template <typename TIMEOUT_UNITS, GatherCompletionPolicy POLICY>
-ScatterGatherRequest* ScatterGatherUDP::scatter(const char* msg, size_t len, int numPksPerRespMsg)
+ScatterGatherRequest* ScatterGatherUDP::scatter(const char* msg, size_t len, RequestParams params)
 {
     // set the POLICY settings in a map for the ebpf program to decide when its done
     // set a timer...
-    auto timeout = std::chrono::microseconds{50 * 1000}; // 1 ms
-
-    // the timeout here doesn't make sense... it should be in ebpf code to avoid
-    // extra work 
 
     // if this is less than the actual num of pks, another syscall
     // is required to submit the remaining socket read operations
-    numPksPerRespMsg = 5;
+    // params.numPksPerRespMsg = 1;
 
     int reqId = s_nextRequestID++;
     ScatterGatherRequest* req = nullptr;
@@ -637,7 +636,7 @@ ScatterGatherRequest* ScatterGatherUDP::scatter(const char* msg, size_t len, int
         // on the maximum number of active requests
         d_activeRequests.emplace(std::piecewise_construct,
              std::forward_as_tuple(reqId),
-             std::forward_as_tuple(reqId, d_workers, numPksPerRespMsg, timeout)
+             std::forward_as_tuple(reqId, d_workers, params.numPksPerRespMsg, params.timeout)
         );
 
         req = &d_activeRequests[reqId];
@@ -662,7 +661,7 @@ ScatterGatherRequest* ScatterGatherUDP::scatter(const char* msg, size_t len, int
     add_scatter_send(&d_ioCtx.ring, d_scatterSkFd, reqId, &d_scatterSkAddr, msg, len);
 
     for (auto w : d_workers) {
-        for (auto i = 0u; i < numPksPerRespMsg; i++) {
+        for (auto i = 0u; i < params.numPksPerRespMsg; i++) {
             add_socket_read(&d_ioCtx.ring, w.socketFd(), reqId, IOUringContext::MaxBufferSize, IOSQE_BUFFER_SELECT);
         }
     }
@@ -670,12 +669,6 @@ ScatterGatherRequest* ScatterGatherUDP::scatter(const char* msg, size_t len, int
     req->start();
 
     return req;
-}
-
-ScatterGatherRequest* ScatterGatherUDP::scatter(const std::string& msg, int numPksPerRespMsg)
-{
-    auto len = strnlen(msg.c_str(), msg.size() + 1);
-    return scatter(msg.c_str(), len, numPksPerRespMsg);
 }
 
 void ScatterGatherUDP::processEvents() {
@@ -776,7 +769,8 @@ int main(int argc, char** argv) {
     // fcntl(sg.ctrlSkFd(), F_SETFL, flags | O_NONBLOCK);
 
     // EXAMPLE 1: Vector-based data (with in-kernel aggregation)
-    auto req = sg.scatter("SCATTER");
+    RequestParams params; // set params here....
+    auto req = sg.scatter("SCATTER", 8, params);
     std::cout << "sent scatter request" << std::endl;
 
     // Wait on the ctrl socket to finish
@@ -817,7 +811,7 @@ int main(int argc, char** argv) {
     // EXAMPLE TWO: multi-packet response, with userspace aggregation over individual packets
     // this is useful for multi-packet responses, so the user can perform the aggregation
     // themselves in user-space
-    auto req2 = sg.scatter("SCATTER");
+    auto req2 = sg.scatter("SCATTER", 8);
 
     while (!req2->isReady()) {
         // Because we have no notification on the ctrl socket in this case, we must

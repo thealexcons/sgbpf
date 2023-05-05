@@ -74,6 +74,7 @@ static inline enum xdp_action post_aggregation_process(struct xdp_md* ctx, sg_ms
 
     // TODO is metadata necessary now? because CAS operation compiles now
     // resetting vector is necessary anyway, so map access is needed.
+    // UNLESS we lazily cleanup the resources (when a new request is sent out)
     // probably need to microbenchmark both alternatives
     /*
     // Device drivers not supporting data_meta will fail here

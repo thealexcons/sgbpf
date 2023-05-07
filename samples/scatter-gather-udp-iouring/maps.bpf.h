@@ -92,16 +92,15 @@ struct {
 } map_workers_resp_count SEC(".maps");
 
 // The total current value of the aggregated responses
-// TODO eventually, use an array/hash map which maps request IDs -> values
-// to support multiple concurrent operations
+struct aggregation_entry {
+    RESP_VECTOR_TYPE data[RESP_MAX_VECTOR_SIZE];
+    struct bpf_spin_lock lock;
+};
 
-// TODO this should also be thread-safe!!!!
-//  - use spin lock to update
-//  - use per cpu maps and perform a final aggregation at the end? probably faster
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __type(key, __u32);
-    __type(value, RESP_VECTOR_TYPE[RESP_MAX_VECTOR_SIZE]);
+    __type(value, struct aggregation_entry);
     __uint(max_entries, MAX_ACTIVE_REQUESTS_ALLOWED);
     __uint(pinning, LIBBPF_PIN_BY_NAME);
 } map_aggregated_response SEC(".maps");

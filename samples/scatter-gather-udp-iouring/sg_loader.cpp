@@ -738,8 +738,7 @@ void ScatterGatherUDP::processPendingEvents(int requestID) {
 
                 // TODO do we want these semantics?
                 // Drop any unnecessary packets (for messages beyond N in waitN or 1 in waitAny)
-                // if so, may also want to prevent unnecessary work in the ebpf programs too
-                // but this may be more tricky
+                // this is currently the implementation
                 if (req.d_status == req_status::READY) {
                     std::cout << "[DEBUG] Dropping packet (request completed already)" << std::endl;
                     continue;
@@ -801,7 +800,7 @@ int main(int argc, char** argv) {
     // int flags = fcntl(sg.ctrlSkFd(), F_GETFL, 0);
     // fcntl(sg.ctrlSkFd(), F_SETFL, flags | O_NONBLOCK);
 
-    /*
+    
     // EXAMPLE 1: Vector-based data (with in-kernel aggregation)
     RequestParams params; // set params here....
     params.completionPolicy = GatherCompletionPolicy::WaitN;
@@ -834,7 +833,7 @@ int main(int argc, char** argv) {
     }
 
     std::cout << "Got a total of " << req->bufferPointers().size() << std::endl;
-    */
+    
 
     // ASSUMPTION: the number of packets in the response message must be specified
     // in advance if calling processEvents() AFTER the ctrl sk event. Otherwise,

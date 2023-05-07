@@ -96,19 +96,33 @@ static inline enum xdp_action post_aggregation_process(struct xdp_md* ctx, sg_ms
     return XDP_PASS;
 }
 
-#define AGGREGATION_PROG_INTRO(resp_msg, agg_resp) { \
+// A helper context structure for user-defined aggregation programs
+struct aggregation_prog_ctx {
+    sg_msg_t* pk_msg;                   // The incoming packet
+    RESP_VECTOR_TYPE* current_value;    // The current aggregated value
+    struct bpf_spin_lock* lock;         // Spinlock for synchronisation
+    struct xdp_md* xdp_ctx;             // The XDP metadata context object
+};
+
+#define AGGREGATION_PROG_INTRO(ctx, xdp_ctx) { \
+    ctx.xdp_ctx = xdp_ctx; \
     int act; \
-    if ((act = parse_msg_xdp(ctx, &resp_msg)) != XDP_PASS) \
+    if ((act = parse_msg_xdp(xdp_ctx, &ctx.pk_msg)) != XDP_PASS) \
         return act; \
-    static __u32 ZERO_IDX = 0; \
-    agg_resp = bpf_map_lookup_elem(&map_aggregated_response, &ZERO_IDX); \
-    if (!agg_resp) \
+    __u32 slot = GET_REQ_MAP_SLOT(ctx.pk_msg->hdr.req_id); \
+    /* static __u32 ZERO_IDX = 0;*/ \
+    struct aggregation_entry* agg_entry = bpf_map_lookup_elem(&map_aggregated_response, &slot); \
+    if (!agg_entry) \
         return XDP_ABORTED; \
+    ctx.current_value = agg_entry->data; \
+    ctx.lock = &agg_entry->lock; \
+    bpf_spin_lock(ctx.lock); \
 }
 
-#define AGGREGATION_PROG_OUTRO(ctx, resp_msg) { \
+#define AGGREGATION_PROG_OUTRO(ctx) { \
+    bpf_spin_unlock(ctx.lock); \
     int act; \
-    if ((act = post_aggregation_process(ctx, resp_msg)) != XDP_PASS) \
+    if ((act = post_aggregation_process(ctx.xdp_ctx, ctx.pk_msg)) != XDP_PASS) \
         return act; \
     return XDP_PASS; \
 }

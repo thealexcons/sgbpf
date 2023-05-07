@@ -21,17 +21,16 @@
 // 
 
 SEC("xdp")
-int aggregation_prog(struct xdp_md* ctx) {
-    sg_msg_t* resp_msg;
-    RESP_VECTOR_TYPE* current_aggregated_value;
-    AGGREGATION_PROG_INTRO(resp_msg, current_aggregated_value);
+int aggregation_prog(struct xdp_md* xdp_ctx) {
+    struct aggregation_prog_ctx ctx;
+    AGGREGATION_PROG_INTRO(ctx, xdp_ctx);
 
     // perform aggregation logic here...
     for (__u32 i = 0; i < RESP_MAX_VECTOR_SIZE; ++i) {
-        current_aggregated_value[i] += ((RESP_VECTOR_TYPE*)resp_msg->body)[i];
+        ctx.current_value[i] += ((RESP_VECTOR_TYPE*)ctx.pk_msg->body)[i];
     }
 
-    AGGREGATION_PROG_OUTRO(ctx, resp_msg);
+    AGGREGATION_PROG_OUTRO(ctx);
 }
 
     // ITEM LIST (IN ORDER OF PRIORITY):
@@ -42,11 +41,20 @@ int aggregation_prog(struct xdp_md* ctx) {
     // TODO: Unify aggregation types for VECTOR and SCALAR data (in common.h)
     //  4. consider ebpf prog vs regular func call for custom aggregation logic
     //      in terms of performance, ease of use, etc.
-    //  3. thread-safety in maps and per-request separation of state
-    //      Need to get ARRAY_OF_MAPS to work for this
-    //  COMPLETION MECHANISM: implement completion conditions for: ALL, ANY, N
+
     //  TIME OUT MECHANISM: measure in userspace, if timed out, make syscall to
     //      cleanup state in the ebpf program (unoptimised path)
+    //  this is essentially done, except the time out cleanup
+
+    // two options:
+    //  eager cleanup: cleanup required map state once the request finishes
+    //      // probably faster, as it avoids duplicate map lookups
+    //      // but requires user invocation to cleanup timed out requess
+    //      // Preferred? since we can assume timed out requests are not part
+    //         of the optimised path.
+    //  lazy cleanup: cleanup required map state of previous entry on scatter send
+    //      // probably slower on scatter send
+    //      // but cleanup is essentially automatic
 
     //  5. start thinking about evaluation (see below)
 

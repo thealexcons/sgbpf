@@ -349,21 +349,17 @@ int gather_prog(struct xdp_md* ctx) {
     }
 
     // Single-packet response aggregation:
-    #ifdef BPF_DEBUG_PRINT
-    bpf_printk("processing msg from worker %d with flags %d", bpf_ntohs(worker.worker_port), resp_msg->hdr.flags);
-    #endif
     
     if (resp_msg->hdr.flags == SG_MSG_F_LAST_CLONED) {
         #ifdef BPF_DEBUG_PRINT
         bpf_printk("dropping cloned (final) packet from worker %d", bpf_ntohs(worker.worker_port));
         #endif
         return XDP_PASS;
+    } else {
+        #ifdef BPF_DEBUG_PRINT
+        bpf_printk("processing msg from worker %d with flags %d", bpf_ntohs(worker.worker_port), resp_msg->hdr.flags);
+        #endif
     }
-
-    // bpf_printk("resp_msg->hdr.req_id = %d", resp_msg->hdr.req_id);
-    // bpf_printk("body[33] = %d", ((RESP_VECTOR_TYPE *)resp_msg->body)[33]);
-    // bpf_printk("--------------------------------------------");
-
     bpf_tail_call(ctx, &map_aggregation_progs, CUSTOM_AGGREGATION_PROG);
 
     // DISCUSS: for performance, maybe just treat it as a function instead
@@ -402,7 +398,8 @@ int gather_prog(struct xdp_md* ctx) {
 
 #endif
 
-    AGGREGATION_PROG_OUTRO(ctx, resp_msg); 
+    // this macro is outdated and only suited for the custom prog
+    // AGGREGATION_PROG_OUTRO(ctx, resp_msg); 
 }
 
 #define ATOMIC_LOAD_64(ptr, dest) asm volatile("lock *(u64 *)(%0+0) += %1" : "=r"(dest) : "r"(ZERO_IDX), "0"(ptr));
@@ -542,7 +539,7 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         return TC_ACT_SHOT;
 
     // Check completion satisfied
-    if (num_workers_satisfied2(cpi, count, pk_count)) {
+    if (num_workers_satisfied(cpi, count, pk_count)) {
         #ifdef BPF_DEBUG_PRINT
         bpf_printk("!!! REQUEST %d COMPLETED, NOTIFYING CTRL SOCKET !!!", resp_msg->hdr.req_id);
         #endif
@@ -557,7 +554,7 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         bpf_clone_redirect(skb, skb->ifindex, 0);
 
         // Notify the ctrl socket with the aggregated response in the packet body
-        RESP_VECTOR_TYPE* agg_resp = bpf_map_lookup_elem(&map_aggregated_response, &ZERO_IDX);
+        RESP_VECTOR_TYPE* agg_resp = bpf_map_lookup_elem(&map_aggregated_response, &slot);
         if (!agg_resp)
             return TC_ACT_SHOT;
 

@@ -420,6 +420,8 @@ static inline __u8 num_workers_satisfied(__u64* count, struct completion_policy_
 
         // This is not in a CAS loop, as it is sufficient to check for stale values
         // since the count is monotonically increasing throughout the request lifetime
+
+        // THIS IS STILL ALLOWING MULTPLE CTRL SK NOTIFS!!!
         __u64* c;
         ATOMIC_LOAD_HACK(count, c);
         if (*c >= num_workers)

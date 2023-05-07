@@ -85,7 +85,9 @@ int main(int argc, char *argv[]) {
       // }
 
 
-      // sleep(2);
+      // if (worker_port != 5556) {
+      //   sleep(2);
+      // }
 
       // Vector example: send vector of increasing numbers
       sg_msg_t resp_msg;

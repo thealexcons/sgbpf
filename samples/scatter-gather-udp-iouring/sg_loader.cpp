@@ -8,7 +8,7 @@
 #include <cstring>
 #include <cassert>
 #include <csignal>
-#include <thread>
+#include <algorithm>
 
 #include <arpa/inet.h>
 #include <net/if.h>
@@ -353,6 +353,21 @@ enum class req_status {
     ERROR
 };
 
+enum class GatherCompletionPolicy 
+{
+    WaitAll = SG_MSG_F_WAIT_ALL,
+    WaitAny = SG_MSG_F_WAIT_ANY,
+    WaitN   = SG_MSG_F_WAIT_N
+};
+
+struct RequestParams {
+    int                         numPksPerRespMsg = 1;
+    std::chrono::microseconds   timeout          = std::chrono::microseconds{50 * 1000};
+    GatherCompletionPolicy      completionPolicy = GatherCompletionPolicy::WaitAll;
+    unsigned int                numWorkersToWait = 0;
+
+    RequestParams() = default;
+};
 
 class ScatterGatherRequest
 {
@@ -366,6 +381,8 @@ private:
     int                     d_expectedPacketsPerMessage = 1;    // The number of expected packets per response message
     req_status              d_status;
     std::chrono::microseconds d_timeOut;
+    GatherCompletionPolicy  d_completionPolicy;
+    int                     d_numWorkersToWait;
     std::chrono::time_point<std::chrono::steady_clock> d_startTime;
 
     // TODO num buffers should be the max number of packets for an entire request
@@ -381,13 +398,14 @@ public:
 
     ScatterGatherRequest(int requestID, 
                          std::vector<Worker> workers, 
-                         int numPksPerMsg,
-                         std::chrono::microseconds timeOut)
+                         const RequestParams& params)
         : d_requestID{requestID}
         , d_workers{workers}
-        , d_expectedPacketsPerMessage{numPksPerMsg}
+        , d_expectedPacketsPerMessage{params.numPksPerRespMsg}
         , d_status{req_status::WAITING}
-        , d_timeOut{timeOut}
+        , d_timeOut{params.timeout}
+        , d_completionPolicy{params.completionPolicy}
+        , d_numWorkersToWait{params.numWorkersToWait}
     {}
 
     int id() const { return d_requestID; }
@@ -426,29 +444,44 @@ protected:
         d_startTime = std::chrono::steady_clock::now();
     }
 
-    /* TODO check if policy has met based on num of workers */
-    bool receivedAll() const { 
-        if (d_expectedPacketsPerMessage == 1)
-            return d_workerBufferPtrs.size() == d_workers.size();
-
-        int numPacketsReceived = 0;
-        for (const auto& [_, ptrs] : d_workerBufferPtrs)
-            numPacketsReceived += ptrs.size();
-        
-        return numPacketsReceived == d_workers.size() * d_expectedPacketsPerMessage;
+    bool receivedSufficientPackets() const {
+        if (d_completionPolicy == GatherCompletionPolicy::WaitAll) {
+            return receivedWaitN(d_workers.size());
+        }
+        else if (d_completionPolicy == GatherCompletionPolicy::WaitN) {
+            return receivedWaitN(d_numWorkersToWait);
+        }
+        else if (d_completionPolicy == GatherCompletionPolicy::WaitAny) {
+            return receivedWaitAny();
+        }
+        return false;
     };
 
-    void updateStatus() {
-        if (hasTimedOut()) {
-            std::cout  << "DEBUGGING: request " << id() << " has timed out!!" << std::endl;
-            d_status = req_status::TIMED_OUT;
-            return;
+    bool receivedWaitAny() const {
+        if (d_expectedPacketsPerMessage == 1)
+            return d_workerBufferPtrs.size() > 0;
+        
+        // For multi-packet messages, we need to check that at least one worker
+        // has delivered a full message
+        for (const auto& [_, ptrs] : d_workerBufferPtrs) {
+            if (ptrs.size() == d_expectedPacketsPerMessage)
+                return true;
         }
+        return false;
+    }
 
-        if (receivedAll()) {
-            d_status = req_status::READY;
-            return;
-        }
+    bool receivedWaitN(uint32_t numWorkers) const {
+        if (d_expectedPacketsPerMessage == 1)
+            return d_workerBufferPtrs.size() == numWorkers;
+
+        // For multi-packet messages, we need to check that N workers have
+        // delivered a full message
+        int fullMessagesReceived = 0;
+        for (const auto& [_, ptrs] : d_workerBufferPtrs) {
+            if (ptrs.size() == d_expectedPacketsPerMessage)
+                fullMessagesReceived++;
+        }        
+        return fullMessagesReceived == numWorkers;
     }
 
     void registerBuffers(io_uring* ring, bool forceSubmit = false) {
@@ -472,23 +505,6 @@ protected:
 /////////////////////////////
 /////  ScatterGatherUDP  //// 
 /////////////////////////////
-
-
-enum class GatherCompletionPolicy 
-{
-    WaitAll = SG_MSG_F_WAIT_ALL,
-    WaitAny = SG_MSG_F_WAIT_ANY,
-    WaitN   = SG_MSG_F_WAIT_N
-};
-
-struct RequestParams {
-    int                         numPksPerRespMsg = 1;
-    std::chrono::microseconds   timeout          = std::chrono::microseconds{50 * 1000};
-    GatherCompletionPolicy      completionPolicy = GatherCompletionPolicy::WaitAll;
-    unsigned int                numWorkersToWait = 0;
-
-    RequestParams() = default;
-};
 
 class ScatterGatherUDP 
 {
@@ -631,14 +647,11 @@ ScatterGatherRequest* ScatterGatherUDP::scatter(const char* msg, size_t len, Req
     unsigned char msgFlags = static_cast<int>(params.completionPolicy);
     uint32_t num_pks = 0; // the num of workers to wait for
     if (params.completionPolicy == GatherCompletionPolicy::WaitN) {
+        params.numWorkersToWait = std::min(params.numWorkersToWait, (uint32_t) d_workers.size());
         num_pks = params.numWorkersToWait;
     } else if (params.completionPolicy == GatherCompletionPolicy::WaitAll) {
         num_pks = d_workers.size();
     }
-
-    // if this is less than the actual num of pks, another syscall
-    // is required to submit the remaining socket read operations
-    // params.numPksPerRespMsg = 1;
 
     int reqId = s_nextRequestID++;
     ScatterGatherRequest* req = nullptr;
@@ -646,7 +659,7 @@ ScatterGatherRequest* ScatterGatherUDP::scatter(const char* msg, size_t len, Req
     // on the maximum number of active requests
     d_activeRequests.emplace(std::piecewise_construct,
             std::forward_as_tuple(reqId),
-            std::forward_as_tuple(reqId, d_workers, params.numPksPerRespMsg, params.timeout)
+            std::forward_as_tuple(reqId, d_workers, params)
     );
 
     req = &d_activeRequests[reqId];
@@ -722,14 +735,27 @@ void ScatterGatherUDP::processPendingEvents(int requestID) {
                     continue;
                 }
 
-                if (req.hasTimedOut()) {
-                    req.updateStatus();
+                if (req.d_status == req_status::TIMED_OUT || req.hasTimedOut()) {
+                    std::cout << "[DEBUG] Request " << req.id() << " has timed out" << std::endl;
+                    req.d_status = req_status::TIMED_OUT;
+                    continue;
+                }
+
+                // TODO do we want these semantics?
+                // Drop any unnecessary packets (for messages beyond N in waitN or 1 in waitAny)
+                // if so, may also want to prevent unnecessary work in the ebpf programs too
+                // but this may be more tricky
+                if (req.d_status == req_status::READY) {
+                    std::cout << "[DEBUG] Dropping packet (request completed already)" << std::endl;
                     continue;
                 }
                 
                 std::cout << "Got pk " << conn_i->fd << " for req " << req.id() << std::endl;
                 req.addBufferPtr(conn_i->fd, buffIdx);
-                req.updateStatus();
+                if (req.receivedSufficientPackets()) {
+                    std::cout << "[DEBUG] Request " << req.id() << " is ready" << std::endl;
+                    req.d_status = req_status::READY;
+                }
 
                 // check for multi-packet message and add more reads if necessary
                 if (req.d_expectedPacketsPerMessage != resp->hdr.num_pks && resp->hdr.num_pks > 1) {
@@ -777,6 +803,7 @@ int main(int argc, char** argv) {
     // int flags = fcntl(sg.ctrlSkFd(), F_GETFL, 0);
     // fcntl(sg.ctrlSkFd(), F_SETFL, flags | O_NONBLOCK);
 
+    /*
     // EXAMPLE 1: Vector-based data (with in-kernel aggregation)
     RequestParams params; // set params here....
     params.completionPolicy = GatherCompletionPolicy::WaitN;
@@ -809,7 +836,7 @@ int main(int argc, char** argv) {
     }
 
     std::cout << "Got a total of " << req->bufferPointers().size() << std::endl;
-    
+    */
 
     // ASSUMPTION: the number of packets in the response message must be specified
     // in advance if calling processEvents() AFTER the ctrl sk event. Otherwise,
@@ -825,24 +852,35 @@ int main(int argc, char** argv) {
     // EXAMPLE TWO: multi-packet response, with userspace aggregation over individual packets
     // this is useful for multi-packet responses, so the user can perform the aggregation
     // themselves in user-space
-    auto req2 = sg.scatter("SCATTER", 8);
+    RequestParams params2;
+    params2.completionPolicy = GatherCompletionPolicy::WaitN;
+    params2.numWorkersToWait = 3;
+    auto req2 = sg.scatter("SCATTER", 8, params2);
 
-    while (!req2->isReady()) {
-        // TODO Update isReady to take into custom waitN completion policies
-
+    // Can this polling loop (ready and expired check) be simplified
+    // including the later check for expiration?
+    while (!req2->isReady() && !req2->isExpired()) {
         // Because we have no notification on the ctrl socket in this case, we must
         // manually check whether we have received the packets by periodically calling
         // the process function
         sg.processRequestEvents(req2->id());
     }
 
+    if (req2->isExpired()) {
+        // req2->cleanup(); // what exactly is needed here? can also do lazy cleanup on scatter
+        std::cout << "Request expired\n";
+        return 0;
+    }
+
     for (const auto& w : req2->workers()) {
-        auto buffIdxs = req2->bufferPointers().at(w.socketFd());
-        std::cout << "Num packets received: " << buffIdxs.size() << std::endl;
-        
-        for (auto buffIdx : buffIdxs) {
-            auto pk = (sg_msg_t*) req2->data(buffIdx);
-            std::cout << "Pk: " << buffIdx << " - " << ((uint32_t*)(pk->body)) << std::endl;
+        if (req2->bufferPointers().count(w.socketFd())) {
+            auto buffIdxs = req2->bufferPointers().at(w.socketFd());
+            std::cout << "Num packets received per msg: " << buffIdxs.size() << std::endl;
+            
+            for (auto buffIdx : buffIdxs) {
+                auto pk = (sg_msg_t*) req2->data(buffIdx);
+                std::cout << "Pk: " << buffIdx << " - " << ((uint32_t*)(pk->body)) << std::endl;
+            }
         }
     }
 }

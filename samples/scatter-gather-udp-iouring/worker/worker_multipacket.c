@@ -10,9 +10,8 @@
 #include <stdlib.h>
 
 #define WORKER_PORT 5555
-// #define COORDINATOR_PORT 9223
 
-#include "common.h"
+#include "../common.h"
 
 int main(int argc, char *argv[]) {
 
@@ -45,12 +44,6 @@ int main(int argc, char *argv[]) {
   
   printf("Socket has port number %d\n", ntohs(name.sin_port));
   
-  // struct sockaddr_in server;
-  // /* Set up the server name */
-  // server.sin_family      = AF_INET;            
-  // server.sin_port        = htons(COORDINATOR_PORT);
-  // server.sin_addr.s_addr = inet_addr("127.0.0.1");
-
   struct sockaddr_in client;
   socklen_t clientSize = sizeof(struct sockaddr_in);
 
@@ -65,45 +58,23 @@ int main(int argc, char *argv[]) {
       /* Send the message in buf to the server */
 
       // Multi-packet scalar aggregation
-      // sg_msg_t resp_msg;
-      // memset(&resp_msg, 0, sizeof(resp_msg));
-      // resp_msg.hdr.req_id = msg->hdr.req_id;
-      // resp_msg.hdr.num_pks = 10;
-      // resp_msg.hdr.msg_type = 1;  // GATHER Msg
-      // resp_msg.hdr.body_len = sizeof(uint32_t);
-      
-      // uint32_t res = htonl(worker_port);
-      // memmove(resp_msg.body, &res, resp_msg.hdr.body_len);
-
-      // for (int i = 1; i <= 10; i++) {
-      //   resp_msg.hdr.seq_num = i;
-      //   if (sendto(sock, &resp_msg, sizeof(sg_msg_t), 0, (struct sockaddr *)&client, clientSize) < 0) {
-      //       perror("sendto()");
-      //       exit(2);
-      //   }
-      //   printf("sent pack %d\n", resp_msg.hdr.seq_num);
-      // }
-
-
-      // if (worker_port != 5556) {
-      //   sleep(2);
-      // }
-
-      // Vector example: send vector of increasing numbers
       sg_msg_t resp_msg;
       memset(&resp_msg, 0, sizeof(resp_msg));
       resp_msg.hdr.req_id = msg->hdr.req_id;
+      resp_msg.hdr.num_pks = 10;
       resp_msg.hdr.msg_type = 1;  // GATHER Msg
-      resp_msg.hdr.body_len = sizeof(uint32_t) * RESP_MAX_VECTOR_SIZE;
+      resp_msg.hdr.body_len = sizeof(uint32_t);
       
-      uint32_t vec[RESP_MAX_VECTOR_SIZE];
-      for (int i = 0; i < RESP_MAX_VECTOR_SIZE; i++) {
-          vec[i] = i;
-      }
-      memmove(resp_msg.body, vec, resp_msg.hdr.body_len);
-      if (sendto(sock, &resp_msg, sizeof(sg_msg_t), 0, (struct sockaddr *)&client, clientSize) < 0) {
-          perror("sendto()");
-          exit(2);
+      uint32_t res = htonl(worker_port);
+      memmove(resp_msg.body, &res, resp_msg.hdr.body_len);
+
+      for (int i = 1; i <= 10; i++) {
+        resp_msg.hdr.seq_num = i;
+        if (sendto(sock, &resp_msg, sizeof(sg_msg_t), 0, (struct sockaddr *)&client, clientSize) < 0) {
+            perror("sendto()");
+            exit(2);
+        }
+        printf("sent pack %d\n", resp_msg.hdr.seq_num);
       }
 
     }

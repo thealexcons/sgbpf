@@ -2,13 +2,16 @@
 import sys, os, subprocess, time, signal
 
 # How to use:
-# ./start_workers <FIRST_PORT> <NUM_WORKERS> <ALIVE_TIME>
+# ./start_workers <FIRST_PORT> <NUM_WORKERS> <ALIVE_TIME> <DATA_MODE>
 # This will generate a workers.cfg file and run the workers
 # for the number of seconds provided
+
+#<DATA_MODE> = "vector", "multipacket", ""
 
 startPort = int(sys.argv[1])
 numServers = int(sys.argv[2])
 aliveTime = int(sys.argv[3])
+dataMode = sys.argv[4] if len(sys.argv) >= 5 else ""
 
 portRange = range(startPort, startPort + numServers)
 
@@ -19,8 +22,10 @@ with open("workers.cfg", "w") as f:
             continue
         f.write('\n')
 
+exe = f"./worker{'_' + dataMode if dataMode != '' else ''}"
+
 procs = [ 
-    subprocess.Popen(["./a.out", str(i)], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE) 
+    subprocess.Popen([exe, str(i)], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE) 
     for i in portRange
 ]
 

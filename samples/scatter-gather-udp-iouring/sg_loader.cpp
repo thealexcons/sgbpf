@@ -793,7 +793,7 @@ int main(int argc, char** argv) {
     // ScatterGather::init("scatter_gather.json");
     ScatterGatherContext ctx{argv[1], argv[2]};
 
-    auto workers = Worker::fromFile("workers.cfg");
+    auto workers = Worker::fromFile("worker/workers.cfg");
     ScatterGatherUDP sg{ctx, workers};
 
     // User can configure the ctrl socket as they wish, eg: set non blocking flag

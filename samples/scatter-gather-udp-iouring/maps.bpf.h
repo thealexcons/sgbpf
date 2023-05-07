@@ -86,7 +86,7 @@ struct {
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __type(key, __u32);
-    __type(value, __u64);
+    __type(value, __s64);
     __uint(max_entries, MAX_ACTIVE_REQUESTS_ALLOWED);
     __uint(pinning, LIBBPF_PIN_BY_NAME);
 } map_workers_resp_count SEC(".maps");

@@ -158,6 +158,11 @@ int scatter_prog(struct __sk_buff* skb) {
 
         __u32 slot = GET_REQ_MAP_SLOT(sgh->hdr.req_id);
 
+        __s64* count = bpf_map_lookup_elem(&map_workers_resp_count, &slot);
+        if (!count)
+            return XDP_ABORTED;
+        __atomic_exchange_n(count, 0, __ATOMIC_ACQ_REL);
+
         struct completion_policy_info* cpi = bpf_map_lookup_elem(&map_req_completion_policy, &slot);
         if (!cpi)
             return XDP_ABORTED;
@@ -405,49 +410,65 @@ int gather_prog(struct xdp_md* ctx) {
     AGGREGATION_PROG_OUTRO(ctx, resp_msg); 
 }
 
-#define ATOMIC_LOAD_HACK(ptr, dest) asm volatile("lock *(u64 *)(%0+0) += %1" : "=r"(dest) : "r"(ZERO_IDX), "0"(ptr));
+#define ATOMIC_LOAD_64(ptr, dest) asm volatile("lock *(u64 *)(%0+0) += %1" : "=r"(dest) : "r"(ZERO_IDX), "0"(ptr));
 
-static inline __u8 num_workers_satisfied(__u64* count, struct completion_policy_info* cpi) {
-    // Note: if the function returns true, the value at count will atomically be 
-    // reset to zero too, EXCEPT if the policy is SG_MSG_F_WAIT_ANY. Hence the lazy
-    // cleanup in the scatter program
-
-    // Getting to this implies at least one packet has arrived, so WAIT_ANY is always satisfied
+static inline __u8 num_workers_satisfied(struct completion_policy_info* cpi, __s64* global_count, __u32* pk_count) {
     if (cpi->policy == SG_MSG_F_WAIT_ANY) {
-        __atomic_exchange_n(count, 0, __ATOMIC_ACQ_REL);
+        __atomic_exchange_n(global_count, -MAX_SOCKETS_ALLOWED, __ATOMIC_ACQ_REL);
         return 1;
     }
-    // __sync_store_n(count, 0, __ATOMIC_RELEASE);
-    // supported atomic ops in ebpf:
-    // https://patchwork.ozlabs.org/project/gcc/patch/20211026122539.186747-1-guillermo.e.martinez@oracle.com/
 
-    __u64 num_workers = cpi->waitN;
-    if (cpi->policy == SG_MSG_F_WAIT_ALL) {
-        return __atomic_compare_exchange_n(count, &num_workers, 0, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
-    }
-    else if (cpi->policy == SG_MSG_F_WAIT_N) {
-        // check >= num_workers
-        // Do we drop any packets after the nth? ask marios
-        // might be able to do this using per-packet metadata and marking their count
-
-        // This is not in a CAS loop, as it is sufficient to check for stale values
-        // since the count is monotonically increasing throughout the request lifetime
-
-        // maybe carry the pk count in the skb like before?
-        // then each pk definitely has a non-changing count and we can drop
-        // anything after
-        // and can use xchg
-
-        // THIS IS STILL ALLOWING MULTPLE CTRL SK NOTIFS!!!
-        __u64* c;
-        ATOMIC_LOAD_HACK(count, c);
-        if (*c >= num_workers) {
-            __atomic_exchange_n(count, 0, __ATOMIC_ACQ_REL);
+    __u32 num_workers = cpi->waitN;
+    if (cpi->policy == SG_MSG_F_WAIT_ALL || cpi->policy == SG_MSG_F_WAIT_N) {
+        if (*pk_count == num_workers) {
+            __atomic_exchange_n(global_count, -MAX_SOCKETS_ALLOWED, __ATOMIC_ACQ_REL);
             return 1;
         }
     }
     return 0;
 }
+
+// static inline __u8 num_workers_satisfied(__u64* count, struct completion_policy_info* cpi) {
+//     // Note: if the function returns true, the value at count will atomically be 
+//     // reset to zero too, EXCEPT if the policy is SG_MSG_F_WAIT_ANY. Hence the lazy
+//     // cleanup in the scatter program
+
+//     // Getting to this implies at least one packet has arrived, so WAIT_ANY is always satisfied
+//     if (cpi->policy == SG_MSG_F_WAIT_ANY) {
+//         __atomic_exchange_n(count, 0, __ATOMIC_ACQ_REL);
+//         return 1;
+//     }
+//     // __sync_store_n(count, 0, __ATOMIC_RELEASE);
+//     // supported atomic ops in ebpf:
+//     // https://patchwork.ozlabs.org/project/gcc/patch/20211026122539.186747-1-guillermo.e.martinez@oracle.com/
+
+//     __u64 num_workers = cpi->waitN;
+//     if (cpi->policy == SG_MSG_F_WAIT_ALL) {
+//         return __atomic_compare_exchange_n(count, &num_workers, 0, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+//     }
+//     else if (cpi->policy == SG_MSG_F_WAIT_N) {
+//         // check >= num_workers
+//         // Do we drop any packets after the nth? ask marios
+//         // might be able to do this using per-packet metadata and marking their count
+
+//         // This is not in a CAS loop, as it is sufficient to check for stale values
+//         // since the count is monotonically increasing throughout the request lifetime
+
+//         // maybe carry the pk count in the skb like before?
+//         // then each pk definitely has a non-changing count and we can drop
+//         // anything after
+//         // and can use xchg
+
+//         // THIS IS STILL ALLOWING MULTPLE CTRL SK NOTIFS!!!
+//         __u64* c;
+//         ATOMIC_LOAD_64(count, c);
+//         if (*c >= num_workers) {
+//             __atomic_exchange_n(count, 0, __ATOMIC_ACQ_REL);
+//             return 1;
+//         }
+//     }
+//     return 0;
+// }
 
 // required if we want to get aggregated result using socket read
 // not used by multi-packet messages
@@ -509,20 +530,21 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
     // Lightweight XDP -> TC communication design pattern: data follows the packet
     //    set field in XDP for skb, read in TC (data follows the packet)
     //  atomic add in XDP, read direct from packet
-    // __u32* pk_count = (void*)(unsigned long) skb->data_meta;
-    // if (pk_count + 1 > (void*)(unsigned long) skb->data) {
-    //     return TC_ACT_OK;
-    // }
+    __u32* pk_count = (void*)(unsigned long) skb->data_meta;
+    if (pk_count + 1 > (void*)(unsigned long) skb->data) {
+        return TC_ACT_OK;
+    }
     struct completion_policy_info* cpi = bpf_map_lookup_elem(&map_req_completion_policy, &slot);
     if (!cpi)
         return TC_ACT_SHOT;
 
-    __u64* count = bpf_map_lookup_elem(&map_workers_resp_count, &slot);
-    if (!count)
+
+    __s64* req_count = bpf_map_lookup_elem(&map_workers_resp_count, &slot);
+    if (!req_count)
         return TC_ACT_SHOT;
 
     // Check completion satisfied
-    if (num_workers_satisfied(count, cpi)) {
+    if (num_workers_satisfied2(cpi, req_count, pk_count)) {
         #ifdef BPF_DEBUG_PRINT
         bpf_printk("!!! REQUEST %d COMPLETED, NOTIFYING CTRL SOCKET !!!", resp_msg->hdr.req_id);
         #endif

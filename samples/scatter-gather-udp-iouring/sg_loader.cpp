@@ -553,6 +553,9 @@ ScatterGatherUDP::ScatterGatherUDP(ScatterGatherContext& ctx,
 
     d_ctx.setScatterPort(PORT);
 
+    if (d_workers.size() > MAX_SOCKETS_ALLOWED)
+        throw std::invalid_argument{"Exceeded max number of workers allowed"};
+
     // Configure the worker sockets
     // TODO Maybe this can even be done in the Worker class itself?, to avoid setters
     for (auto i = 0u; i < d_workers.size(); ++i) {
@@ -849,7 +852,7 @@ int main(int argc, char** argv) {
     // themselves in user-space
     RequestParams params2;
     params2.completionPolicy = GatherCompletionPolicy::WaitN;
-    params2.numWorkersToWait = 3;
+    params2.numWorkersToWait = 2;
     auto req2 = sg.scatter("SCATTER", 8, params2);
 
     // Can this polling loop (ready and expired check) be simplified

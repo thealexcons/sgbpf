@@ -39,13 +39,15 @@ static void __always_inline clone_and_send_packet(struct __sk_buff* skb,
     (void) iph;
     (void) udph;
 
-    // char str[16] = "";
-    // __u32 ip_addr_h = bpf_ntohl(worker_ip);
-	// BPF_SNPRINTF(str, sizeof(str), "%d.%d.%d.%d",
-	// 	(ip_addr_h >> 24) & 0xff, (ip_addr_h >> 16) & 0xff,
-	// 	(ip_addr_h >> 8) & 0xff, ip_addr_h & 0xff);
+    #ifdef BPF_DEBUG_PRINT
+    char str[16] = "";
+    __u32 ip_addr_h = bpf_ntohl(worker_ip);
+	BPF_SNPRINTF(str, sizeof(str), "%d.%d.%d.%d",
+		(ip_addr_h >> 24) & 0xff, (ip_addr_h >> 16) & 0xff,
+		(ip_addr_h >> 8) & 0xff, ip_addr_h & 0xff);
 
-    // bpf_printk("Sending packet to %s:%d", str, bpf_ntohs(worker_port));
+    bpf_printk("Sending packet to %s:%d", str, bpf_ntohs(worker_port));
+    #endif
 
     // 1. Update the packet header for the new destination
     bpf_skb_store_bytes(skb, IP_DEST_OFF, &worker_ip, sizeof(worker_ip), BPF_F_RECOMPUTE_CSUM);
@@ -150,7 +152,9 @@ int scatter_prog(struct __sk_buff* skb) {
             return TC_ACT_OK;
 
         // Configure request settings from the provided flags (completion policy)
+        #ifdef BPF_DEBUG_PRINT
         bpf_printk("Got SCATTER request");
+        #endif
 
         __u32 slot = GET_REQ_MAP_SLOT(sgh->hdr.req_id);
 
@@ -168,6 +172,7 @@ int scatter_prog(struct __sk_buff* skb) {
         cpi->policy = sgh->hdr.flags;
         cpi->waitN = (sgh->hdr.flags == SG_MSG_F_WAIT_N || sgh->hdr.flags == SG_MSG_F_WAIT_ALL) ? sgh->hdr.num_pks : 0;
 
+        #ifdef BPF_DEBUG_PRINT
         if (sgh->hdr.flags == SG_MSG_F_WAIT_ANY) {
             bpf_printk("Got WAIT_ANY completion policy");
         } else if (sgh->hdr.flags == SG_MSG_F_WAIT_N) {
@@ -175,7 +180,7 @@ int scatter_prog(struct __sk_buff* skb) {
         } else {
             bpf_printk("Got default WAIT_ALL completion policy");
         }
-
+        #endif
         // start timer for request
         /*
         struct req_timing* rqt = bpf_map_lookup_elem(&map_req_timing, &slot);
@@ -196,8 +201,9 @@ int scatter_prog(struct __sk_buff* skb) {
         };
         bpf_for_each_map_elem(&map_workers, send_worker, &data, 0);
 
+#ifdef BPF_DEBUG_PRINT
         bpf_printk("Finished SCATTER request");
-        
+#endif
         //  todo: no need to clone the last one
         return TC_ACT_SHOT; // To avoid double-sending to the last worker
     }
@@ -336,15 +342,21 @@ int gather_prog(struct xdp_md* ctx) {
 
     // If this is a multi-packet message, forward the packet without aggregation
     if (resp_msg->hdr.num_pks > 1 && resp_msg->hdr.seq_num <= resp_msg->hdr.num_pks) {
+        #ifdef BPF_DEBUG_PRINT
         bpf_printk("[MP] [Worker %d] Got packet with req ID = %d and seq num = %d", bpf_ntohs(worker.worker_port), resp_msg->hdr.req_id, resp_msg->hdr.seq_num);
+        #endif
         return XDP_PASS;
     }
 
     // Single-packet response aggregation:
-
+    #ifdef BPF_DEBUG_PRINT
     bpf_printk("processing msg from worker %d with flags %d", bpf_ntohs(worker.worker_port), resp_msg->hdr.flags);
+    #endif
+    
     if (resp_msg->hdr.flags == SG_MSG_F_LAST_CLONED) {
+        #ifdef BPF_DEBUG_PRINT
         bpf_printk("dropping cloned (final) packet from worker %d", bpf_ntohs(worker.worker_port));
+        #endif
         return XDP_PASS;
     }
 
@@ -421,12 +433,18 @@ static inline __u8 num_workers_satisfied(__u64* count, struct completion_policy_
         // This is not in a CAS loop, as it is sufficient to check for stale values
         // since the count is monotonically increasing throughout the request lifetime
 
+        // maybe carry the pk count in the skb like before?
+        // then each pk definitely has a non-changing count and we can drop
+        // anything after
+        // and can use xchg
+
         // THIS IS STILL ALLOWING MULTPLE CTRL SK NOTIFS!!!
         __u64* c;
         ATOMIC_LOAD_HACK(count, c);
-        if (*c >= num_workers)
+        if (*c >= num_workers) {
             __atomic_exchange_n(count, 0, __ATOMIC_ACQ_REL);
-        return 1;
+            return 1;
+        }
     }
     return 0;
 }
@@ -505,7 +523,9 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
 
     // Check completion satisfied
     if (num_workers_satisfied(count, cpi)) {
+        #ifdef BPF_DEBUG_PRINT
         bpf_printk("!!! REQUEST %d COMPLETED, NOTIFYING CTRL SOCKET !!!", resp_msg->hdr.req_id);
+        #endif
 
         __u16* ctrl_sk_port = bpf_map_lookup_elem(&map_gather_ctrl_port, &ZERO_IDX);
         if (!ctrl_sk_port)
@@ -525,7 +545,9 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         bpf_skb_store_bytes(skb, UDP_DEST_OFF, ctrl_sk_port, sizeof(*ctrl_sk_port), BPF_F_RECOMPUTE_CSUM);
 
         // Reset the aggregated vector from this request
+        #ifdef BPF_DEBUG_PRINT
         bpf_printk("reset aggregation to 0");
+        #endif
 
         // NOTE: alternatively, we could consider a lazy cleanup: cleanup the resources
         // for a request when a new request is launched and is meant to take the old request's place

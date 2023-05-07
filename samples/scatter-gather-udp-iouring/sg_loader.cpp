@@ -291,14 +291,6 @@ void ScatterGatherContext::setGatherControlPort(uint16_t port)
     d_gatherCtrlPortMap.update(&ZERO, &portNetBytes);
 }
 
-void print_sq_poll_kernel_thread_status() {
-
-    if (system("ps --ppid 2 | grep io_uring-sq" ) == 0)
-        printf("Kernel thread io_uring-sq found running...\n");
-    else
-        printf("Kernel thread io_uring-sq is not running.\n");
-}
-
 struct IOUringContext 
 {
     constexpr static const auto NumBuffers    = 1024;
@@ -791,6 +783,9 @@ void ScatterGatherUDP::processPendingEvents(int requestID) {
 /////////////////////////////////////////////////////////////////////////////
 
 int main(int argc, char** argv) {
+
+    // Disable all cout
+    // std::cout.rdbuf(nullptr);
 
     // globally initialises the library and prepares eBPF environment
     // ScatterGather::init("scatter_gather.json");

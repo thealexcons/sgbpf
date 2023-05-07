@@ -34,13 +34,13 @@ $(SG_LOADER): sg_loader.cpp
 
 
 $(BPF_PROG): scatter_gather.bpf.c
-	clang-12 -target bpf -D __BPF_TRACING__ -I$(LIBBPF_HEADERS) -g -Wall -O2 -c $^ -o $@
+	clang-12 -target bpf -D __BPF_TRACING__ -D BPF_DEBUG_PRINT -I$(LIBBPF_HEADERS) -g -Wall -O2 -c $^ -o $@
 # clang-12 -target bpf -emit-llvm -S -D __BPF_TRACING__ -I$(LIBBPF_HEADERS) -g -Wall -O2 -c $^ -o $@.ll
 # llc-12 -march=bpf -filetype=obj -o $@ $@.ll
 
 
 $(BPF_AGGREGATION_PROG): aggregation.bpf.c
-	clang-12 -target bpf -D __BPF_TRACING__ -I$(LIBBPF_HEADERS) -g -Wall -O2 -c $^ -o $@
+	clang-12 -target bpf -D __BPF_TRACING__ -D BPF_DEBUG_PRINT -I$(LIBBPF_HEADERS) -g -Wall -O2 -c $^ -o $@
 
 clean:
 	rm -f *.o *.s

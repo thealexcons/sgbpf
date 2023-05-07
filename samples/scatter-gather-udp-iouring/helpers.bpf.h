@@ -61,16 +61,20 @@ static inline enum xdp_action post_aggregation_process(struct xdp_md* ctx, sg_ms
 
     // Increment received packet count for the request
     __u32 slot = GET_REQ_MAP_SLOT(resp_msg->hdr.req_id);
-    bpf_printk("Slot for request: %d", slot);
 
-    // TODO something about this not working when called from custom aggregation program
-    // maybe related to tail call issue...
+    #ifdef BPF_DEBUG_PRINT
+    bpf_printk("Slot for request: %d", slot);
+    #endif
+
     __u64* count = bpf_map_lookup_elem(&map_workers_resp_count, &slot);
     if (!count)
         return XDP_ABORTED;
 
     __u64 pk_count = __atomic_add_fetch(count, 1, __ATOMIC_RELEASE);
+
+    #ifdef BPF_DEBUG_PRINT
     bpf_printk("new count is %d", pk_count);
+    #endif
 
     // TODO is metadata necessary now? because CAS operation compiles now
     // resetting vector is necessary anyway, so map access is needed.
@@ -89,8 +93,6 @@ static inline enum xdp_action post_aggregation_process(struct xdp_md* ctx, sg_ms
 
     *pk_count_meta = pk_count;
     */
-
-    bpf_printk("post aggregation function done");
     return XDP_PASS;
 }
 

@@ -19,6 +19,7 @@
 
 #define MOD_POW2(x, y) (x & (y - 1))
 #define GET_REQ_MAP_SLOT(req_id) MOD_POW2(req_id, MAX_ACTIVE_REQUESTS_ALLOWED)
+#define ATOMIC_LOAD_S64(ptr, dest) asm volatile("lock *(i64 *)(%0+0) += %1" : "=r"(dest) : "r"(ZERO_IDX), "0"(ptr));
 
 static inline enum xdp_action parse_msg_xdp(struct xdp_md* ctx, sg_msg_t** msg) {
     void* data = (void *)(long)ctx->data;
@@ -71,15 +72,6 @@ static inline enum xdp_action post_aggregation_process(struct xdp_md* ctx, sg_ms
         return XDP_ABORTED;
 
     __s64 pk_count = __atomic_add_fetch(count, 1, __ATOMIC_ACQ_REL);
-    if (pk_count <= 0) {
-        #ifdef BPF_DEBUG_PRINT
-        bpf_printk("dropping packet, count is %d", pk_count);
-        #endif
-        return XDP_DROP;
-    }
-    #ifdef BPF_DEBUG_PRINT
-    bpf_printk("new count is %d", pk_count);
-    #endif
 
     // Device drivers not supporting data_meta will fail here
     if (bpf_xdp_adjust_meta(ctx, -(int) sizeof(__u32)) < 0)
@@ -126,5 +118,8 @@ struct aggregation_prog_ctx {
         return act; \
     return XDP_PASS; \
 }
+
+
+
 
 #endif // HELPERS_BPF_H

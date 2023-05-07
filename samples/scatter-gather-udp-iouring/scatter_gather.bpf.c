@@ -158,6 +158,12 @@ int scatter_prog(struct __sk_buff* skb) {
 
         __u32 slot = GET_REQ_MAP_SLOT(sgh->hdr.req_id);
 
+        // Reset count (NOTE: this must go here, NOT in the ctrl sk notification)
+        __s64* count = bpf_map_lookup_elem(&map_workers_resp_count, &slot);
+        if (!count)
+            return XDP_ABORTED;
+        __atomic_exchange_n(count, 0, __ATOMIC_ACQ_REL);
+
         struct completion_policy_info* cpi = bpf_map_lookup_elem(&map_req_completion_policy, &slot);
         if (!cpi)
             return XDP_ABORTED;
@@ -360,6 +366,22 @@ int gather_prog(struct xdp_md* ctx) {
         bpf_printk("processing msg from worker %d with flags %d", bpf_ntohs(worker.worker_port), resp_msg->hdr.flags);
         #endif
     }
+
+    // Drop packet if it is no longer necessary, to avoid racy reads when copying
+    // the aggregated value into the final ctrl sk packet
+    __u32 slot = GET_REQ_MAP_SLOT(resp_msg->hdr.req_id);
+    __s64* count = bpf_map_lookup_elem(&map_workers_resp_count, &slot);
+    if (!count)
+        return XDP_ABORTED;
+
+    __s64 pk_count = __atomic_add_fetch(count, 0, __ATOMIC_ACQ_REL); // load
+    if (pk_count < 0) {
+        #ifdef BPF_DEBUG_PRINT
+        bpf_printk("dropping packet, count is %d", pk_count);
+        #endif
+        return XDP_DROP;
+    }
+  
     bpf_tail_call(ctx, &map_aggregation_progs, CUSTOM_AGGREGATION_PROG);
 
     // DISCUSS: for performance, maybe just treat it as a function instead
@@ -402,7 +424,6 @@ int gather_prog(struct xdp_md* ctx) {
     // AGGREGATION_PROG_OUTRO(ctx, resp_msg); 
 }
 
-#define ATOMIC_LOAD_64(ptr, dest) asm volatile("lock *(u64 *)(%0+0) += %1" : "=r"(dest) : "r"(ZERO_IDX), "0"(ptr));
 
 static inline __u8 num_workers_satisfied(struct completion_policy_info* cpi, __s64* global_count, __u32* pk_count) {
     // The response count is set to the max negative number so that any packets
@@ -465,8 +486,7 @@ static inline __u8 num_workers_satisfied(struct completion_policy_info* cpi, __s
 //     return 0;
 // }
 
-// required if we want to get aggregated result using socket read
-// not used by multi-packet messages
+
 SEC("tc")
 int notify_gather_ctrl_prog(struct __sk_buff* skb) {
 	void* data = (void *)(long)skb->data;
@@ -541,7 +561,7 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
     // Check completion satisfied
     if (num_workers_satisfied(cpi, count, pk_count)) {
         #ifdef BPF_DEBUG_PRINT
-        bpf_printk("!!! REQUEST %d COMPLETED, NOTIFYING CTRL SOCKET !!!", resp_msg->hdr.req_id);
+        bpf_printk("!!! REQUEST %d COMPLETED WITH count %d, NOTIFYING CTRL SOCKET !!!", resp_msg->hdr.req_id, *pk_count);
         #endif
 
         __u16* ctrl_sk_port = bpf_map_lookup_elem(&map_gather_ctrl_port, &ZERO_IDX);
@@ -554,11 +574,14 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         bpf_clone_redirect(skb, skb->ifindex, 0);
 
         // Notify the ctrl socket with the aggregated response in the packet body
-        RESP_VECTOR_TYPE* agg_resp = bpf_map_lookup_elem(&map_aggregated_response, &slot);
-        if (!agg_resp)
+        struct aggregation_entry* agg_entry = bpf_map_lookup_elem(&map_aggregated_response, &slot);
+        if (!agg_entry)
             return TC_ACT_SHOT;
 
-        bpf_skb_store_bytes(skb, SG_MSG_BODY_OFF, (char*)agg_resp, sizeof(RESP_VECTOR_TYPE) * RESP_MAX_VECTOR_SIZE, BPF_F_RECOMPUTE_CSUM);
+        // Note: spinlock not needed for reading the aggregated data because 
+        // at this point, any redundant packet trying to update the aggregated 
+        // response is dropped prior to the aggregation logic
+        bpf_skb_store_bytes(skb, SG_MSG_BODY_OFF, (char*)agg_entry->data, sizeof(RESP_VECTOR_TYPE) * RESP_MAX_VECTOR_SIZE, BPF_F_RECOMPUTE_CSUM);
         bpf_skb_store_bytes(skb, UDP_DEST_OFF, ctrl_sk_port, sizeof(*ctrl_sk_port), BPF_F_RECOMPUTE_CSUM);
 
         // Reset the aggregated vector from this request
@@ -566,11 +589,9 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         bpf_printk("reset aggregation to 0");
         #endif
         
-        __atomic_exchange_n(count, 0, __ATOMIC_ACQ_REL);
-
         // NOTE: alternatively, we could consider a lazy cleanup: cleanup the resources
         // for a request when a new request is launched and is meant to take the old request's place
-        reset_aggregated_vector(agg_resp);
+        reset_aggregated_vector(agg_entry->data);
     }
 
     return TC_ACT_OK;

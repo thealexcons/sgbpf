@@ -158,11 +158,6 @@ int scatter_prog(struct __sk_buff* skb) {
 
         __u32 slot = GET_REQ_MAP_SLOT(sgh->hdr.req_id);
 
-        __s64* count = bpf_map_lookup_elem(&map_workers_resp_count, &slot);
-        if (!count)
-            return XDP_ABORTED;
-        __atomic_exchange_n(count, 0, __ATOMIC_ACQ_REL);
-
         struct completion_policy_info* cpi = bpf_map_lookup_elem(&map_req_completion_policy, &slot);
         if (!cpi)
             return XDP_ABORTED;
@@ -413,6 +408,9 @@ int gather_prog(struct xdp_md* ctx) {
 #define ATOMIC_LOAD_64(ptr, dest) asm volatile("lock *(u64 *)(%0+0) += %1" : "=r"(dest) : "r"(ZERO_IDX), "0"(ptr));
 
 static inline __u8 num_workers_satisfied(struct completion_policy_info* cpi, __s64* global_count, __u32* pk_count) {
+    // The response count is set to the max negative number so that any packets
+    // of the same request currently in-flight cannot reach the target count again
+    
     if (cpi->policy == SG_MSG_F_WAIT_ANY) {
         __atomic_exchange_n(global_count, -MAX_SOCKETS_ALLOWED, __ATOMIC_ACQ_REL);
         return 1;
@@ -539,12 +537,12 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         return TC_ACT_SHOT;
 
 
-    __s64* req_count = bpf_map_lookup_elem(&map_workers_resp_count, &slot);
-    if (!req_count)
+    __s64* count = bpf_map_lookup_elem(&map_workers_resp_count, &slot);
+    if (!count)
         return TC_ACT_SHOT;
 
     // Check completion satisfied
-    if (num_workers_satisfied2(cpi, req_count, pk_count)) {
+    if (num_workers_satisfied2(cpi, count, pk_count)) {
         #ifdef BPF_DEBUG_PRINT
         bpf_printk("!!! REQUEST %d COMPLETED, NOTIFYING CTRL SOCKET !!!", resp_msg->hdr.req_id);
         #endif
@@ -570,6 +568,8 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         #ifdef BPF_DEBUG_PRINT
         bpf_printk("reset aggregation to 0");
         #endif
+        
+        __atomic_exchange_n(count, 0, __ATOMIC_ACQ_REL);
 
         // NOTE: alternatively, we could consider a lazy cleanup: cleanup the resources
         // for a request when a new request is launched and is meant to take the old request's place

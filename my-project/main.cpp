@@ -1,6 +1,7 @@
 #include <iostream>
 #include <cstring>
 #include <algorithm>
+#include <chrono>
 
 #include <net/if.h>
 #include <unistd.h>
@@ -18,7 +19,7 @@ int main(int argc, char** argv) {
         std::cerr << "Invalid usage. Correct usage: " << argv[0] << " <path/to/bpfobjs> <ifname>" << std::endl;
         return 1;
     }
-    // sudo ./sg_loader bpfobjs lo
+    // sudo ./sg_program bpfobjs lo
     sgbpf::Context ctx{argv[1], argv[2]};
 
     auto workers = sgbpf::Worker::fromFile("workers.cfg");
@@ -28,6 +29,7 @@ int main(int argc, char** argv) {
     sgbpf::ReqParams params; // set params here....
     params.completionPolicy = sgbpf::GatherCompletionPolicy::WaitN;
     params.numWorkersToWait = 10;
+    params.timeout = std::chrono::microseconds{10*1000}; // 10 ms
     auto req = service.scatter("SCATTER", 8, params);
     std::cout << "sent scatter request" << std::endl;
 

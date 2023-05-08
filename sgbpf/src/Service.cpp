@@ -224,16 +224,9 @@ Request* Service::scatter(const char* msg, size_t len, ReqParams params)
 }
 
 
-void Service::processEvents() {
-    processPendingEvents(DEFAULT_REQUEST_ID);
-}
-
-
-void Service::processRequestEvents(int requestID) {
-    assert(requestID > DEFAULT_REQUEST_ID);
+void Service::processEvents(int requestID) {
     processPendingEvents(requestID);
 }
-
 
 
 void Service::processPendingEvents(int requestID) {

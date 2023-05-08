@@ -52,7 +52,7 @@ int main(int argc, char** argv) {
     // TODO processEvents may process more packets than those reflected in the aggregated
     // value returned by the ctrl sk (ie: aggregates 2 pks, but the 3rd pk arrives later
     // and is captured by processEvents(). need a way to synchronise this?????)
-    service.processEvents(); // or alternatively: sg.processRequestEvents(req->id());
+    service.processEvents();
     
     auto aggregatedData = (uint32_t*)(buf.body);
     std::cout << "control socket packet received\n";
@@ -90,7 +90,7 @@ int main(int argc, char** argv) {
         // Because we have no notification on the ctrl socket in this case, we must
         // manually check whether we have received the packets by periodically calling
         // the process function
-        service.processRequestEvents(req2->id());
+        service.processEvents(req2->id());
     }
 
     if (req2->isExpired()) {

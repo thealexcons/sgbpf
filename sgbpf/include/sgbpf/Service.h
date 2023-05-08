@@ -33,6 +33,8 @@ private:
 
     static uint32_t s_nextRequestID;
 
+    constexpr static const int DEFAULT_REQUEST_ID = -1;
+
 public:
 
     Service(Context& ctx,
@@ -44,14 +46,11 @@ public:
 
     int ctrlSkFd() const { return d_ctrlSkFd; }
 
-    void processEvents();
-
-    void processRequestEvents(int requestID);
+    void processEvents(int requestID = DEFAULT_REQUEST_ID);
 
 private:
 
-    constexpr static const int DEFAULT_REQUEST_ID = -1;
-    void processPendingEvents(int requestID = DEFAULT_REQUEST_ID);
+    void processPendingEvents(int requestID);
 };
 
 

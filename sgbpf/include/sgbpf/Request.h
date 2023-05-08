@@ -19,10 +19,12 @@ enum class GatherCompletionPolicy
     WaitN   = SG_MSG_F_WAIT_N
 };
 
-struct ReqParams {
+class ReqParams {
+private:
     constexpr const static auto DEFAULT_TIMEOUT_US = std::chrono::microseconds{50 * 1000};
     constexpr const static auto DEFAULT_COMPLETION_POLICY = GatherCompletionPolicy::WaitAll;
 
+public:
     unsigned int                numPksPerRespMsg = 1;
     unsigned int                numWorkersToWait = 0;
     std::chrono::microseconds   timeout          = DEFAULT_TIMEOUT_US;

@@ -5,10 +5,10 @@
 #include <chrono>
 #include <sstream>
 
-#include "ebpfpp/Program.h"
-#include "ebpfpp/Map.h"
-#include "ebpfpp/Object.h"
-#include "ebpfpp/Util.h"
+#include "sgbpf/ebpf/Program.h"
+#include "sgbpf/ebpf/Map.h"
+#include "sgbpf/ebpf/Object.h"
+#include "sgbpf/ebpf/Util.h"
 
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
@@ -26,6 +26,7 @@ static int ifindex = -1;
 
 
 int main(int argc, char** argv) {
+    // sudo ./loader sk_lookup.bpf.o dispatch_prog lo
     if (argc < 3) {
         std::cerr << "ERROR - Usage is: " << argv[0] << " <BPF_FILE> <PROG_NAME> <INTERFACE>" << "\n";
         return 1;
@@ -86,7 +87,12 @@ int main(int argc, char** argv) {
     auto socketMap = obj.findMapByName("map_socket").value();
     const int zero = 0;
     auto sockfd = static_cast<uint64_t>(skfd);
-    socketMap.update(&zero, &sockfd);
+    socketMap.update(&zero, &sockfd, BPF_NOEXIST);
+
+    std::cout << "added skfd to map:" << skfd << std::endl;
+    int verifyFd = -2;
+    socketMap.find(&zero, &verifyFd);
+    std::cout << "verify map sk: " << verifyFd << std::endl;
     
     sockaddr_in clientAddr;
     memset(&clientAddr, 0, sizeof(clientAddr));
@@ -115,6 +121,8 @@ int main(int argc, char** argv) {
         std::string resp = "ack";
         sendto(skfd, resp.c_str(), strlen(resp.c_str()), MSG_CONFIRM,
             (const struct sockaddr*) &clientAddr, len);
+
+        break;
     }
 
     bpf_link__destroy(progLink);    // this will dettach and destroy the FD (not sure if needed)

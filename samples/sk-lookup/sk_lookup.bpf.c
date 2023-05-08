@@ -19,6 +19,7 @@ struct {
     __type(key, __u32);
     __type(value, __u64);
     __uint(max_entries, 1);
+    __uint(pinning, LIBBPF_PIN_BY_NAME); // sudo rm /sys/fs/bpf/map_socket
 } map_socket SEC(".maps");
 
 
@@ -26,14 +27,27 @@ SEC("sk_lookup")
 int dispatch_prog(struct bpf_sk_lookup* ctx) {
 	const __u32 zero = 0;
 
+    // bpf_printk("Got message here: %d", ctx->local_port);
+
     __u16 port = ctx->local_port;   // NOTE: this is in host byte order
     __u8* open = bpf_map_lookup_elem(&map_ports, &port);
     if (!open)
         return SK_PASS;
 
+    if (ctx->protocol == 6) {
+        bpf_printk("got tcp packe");
+    } else if (ctx->protocol == 17) {
+        bpf_printk("got udp packet");
+    }
+    bpf_printk("Got pk with relevant port: %d", port);
+
     struct bpf_sock* sk = bpf_map_lookup_elem(&map_socket, &zero);
-    if (!sk)
+    if (!sk) {
+        bpf_printk("could not find sk in map!??");
         return SK_DROP;
+    }
+
+    bpf_printk("Got bpf_sock from map: %d", sk->src_port);
 
     long err = bpf_sk_assign(ctx, sk, 0);
     bpf_sk_release(sk);

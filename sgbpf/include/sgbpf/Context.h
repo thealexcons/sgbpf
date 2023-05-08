@@ -8,6 +8,7 @@
 #include "Worker.h"
 #include "Common.h"
 
+#include <filesystem>
 #include <net/if.h>
 #include <liburing.h>
 
@@ -33,6 +34,10 @@ private:
     ebpf::Map               d_appPortMap;   
     ebpf::Map               d_gatherCtrlPortMap;   
 
+    // Object names
+    constexpr static const auto MAIN_SG_BPF_OBJ_NAME = "scatter_gather.bpf.o";
+    constexpr static const auto AGGREGATION_BPF_OBJ_NAME = "aggregation.bpf.o";
+
     // Map names
     constexpr static const auto WORKERS_MAP_NAME = "map_workers";
     constexpr static const auto WORKERS_HASH_MAP_NAME = "map_workers_resp_status";
@@ -42,8 +47,7 @@ private:
     constexpr static const auto ZERO = 0;
 
 public:
-    // TODO eventually read from file
-    Context(const char* mainObjFile, const char* aggObjFile, const char* ifname);
+    Context(const char* bpfObjsPath, const char* ifname);
     ~Context();
 
     void setScatterPort(uint16_t port);

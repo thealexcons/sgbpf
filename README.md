@@ -28,9 +28,9 @@ See appendix 1 in report, but in summary:
     ```$ make --directory = libbpf/src install_uapi_headers```
 
 Note: When running the loader program, if you get a message about a missing shared library, you can copy
-the missed shared object to `lib/x86_64-linux-gnu` or updated the `LD_LIBRARY_PATH` path ([example](https://stackoverflow.com/questions/70696552/cannot-open-shared-object-file-no-such-file-or-directory-including-libbpf-wit)).
+the missed shared object to `lib/x86_64-linux-gnu` or update the `LD_LIBRARY_PATH` path ([example](https://stackoverflow.com/questions/70696552/cannot-open-shared-object-file-no-such-file-or-directory-including-libbpf-wit)).
 
-1. Install `liburing` headers on the system:
+4. Install `liburing` headers on the system:
    
     ```$ git clone https://github.com/axboe/liburing```
 
@@ -39,7 +39,7 @@ the missed shared object to `lib/x86_64-linux-gnu` or updated the `LD_LIBRARY_PA
     ```$ ./configure && make```
 
     ```$ sudo make install```
-    
+
 
 ## Starting a new project
 
@@ -57,7 +57,7 @@ the missed shared object to `lib/x86_64-linux-gnu` or updated the `LD_LIBRARY_PA
    1. If you get a linker error (eg: undefined references), try re-running `make install` and then `make`.
    
 6. Now, you need to build the BPF object files that contain the programs that will be loaded into the kernel:
-   1. You may optionally set the `OUTPUT_BPF_OBJ_DIR` environment variable to a (full) directory in which the built object files will be placed. If ommitted, the object files will be placed under `bpfobj/` in the sgbpf directory.
+   1. You may optionally set the `OUTPUT_BPF_OBJ_DIR` environment variable to a (full) directory in which the built object files will be placed. If ommitted, the object files will be placed under `bpfobj/` in the sgbpf directory by default.
    
    2. You are required to set the `CUSTOM_AGGREGATION_BPF_PROG` environment variable which should be the FULL path to your source file written in C containing the custom aggregation logic in a XDP program (which must be named `aggregation_prog`). See the example in `my-project/custom_aggregation.bpf.c`. Example (from inside `my-project`): `export CUSTOM_AGGREGATION_BPF_PROG=$(pwd)/custom_aggregation.bpf.c`
    
@@ -65,4 +65,4 @@ the missed shared object to `lib/x86_64-linux-gnu` or updated the `LD_LIBRARY_PA
 
 7. Create a line-separated config file containing a list of worker endpoints, in the format: IPv4_Address:Port (see the example in `my-project`). 
 
-8. Run your program: `sudo ./sg_program <path/to/scatter_gather.bpf.o> <path/to/aggregation.bpf.o> lo`  (remember that to load BPF programs, you need admin privileges).
+8. Run your program: `sudo ./sg_program <path/to/bpfobjs> lo`  (remember that to load BPF programs, you need admin privileges).

@@ -3,9 +3,11 @@
 namespace sgbpf
 {
 
-Context::Context(const char* objFile, const char* aggObjFile, const char* ifname)
-    : d_object{objFile}
-    , d_aggregationProgObject{aggObjFile}
+namespace fs = std::filesystem;
+
+Context::Context(const char* bpfObjsPath, const char* ifname)
+    : d_object{(fs::path(bpfObjsPath) / fs::path(MAIN_SG_BPF_OBJ_NAME)).c_str()}
+    , d_aggregationProgObject{(fs::path(bpfObjsPath) / fs::path(AGGREGATION_BPF_OBJ_NAME)).c_str()}
     , d_ifindex{::if_nametoindex(ifname)}
     , d_scatterProg{d_object.findProgramByName("scatter_prog").value()}
     , d_gatherNotifyProg{d_object.findProgramByName("notify_gather_ctrl_prog").value()}

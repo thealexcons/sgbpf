@@ -1,8 +1,11 @@
-CLEANEXTS   = o a
 
 ########### USER LIB ###########
 CC := g++
 OUTPUTFILE := libsgbpf.a
+
+# TODO can we somehow decouple LIBBPF from SGBPF directory structure??
+# MAYBE force the user to set an environment variable to their libbpf path
+# Since libbpf is required HERE and in the user program Makefile
 
 INC_DIR := ./include/sgbpf
 LIBBPF_INC := ../libbpf/src/root/usr/include/

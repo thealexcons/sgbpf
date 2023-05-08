@@ -20,8 +20,8 @@ int main(int argc, char** argv) {
     // globally initialises the library and prepares eBPF environment
     // ScatterGather::init("scatter_gather.json");
     
-    // sudo ./sg_loader scatter_gather.bpf.o aggregation.bpf.o lo
-    sgbpf::Context ctx{argv[1], argv[2], argv[3]};
+    // sudo ./sg_loader . lo
+    sgbpf::Context ctx{argv[1], argv[2]};
 
     auto workers = sgbpf::Worker::fromFile("worker/workers.cfg");
     sgbpf::Service service{ctx, workers};

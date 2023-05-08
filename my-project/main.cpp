@@ -14,8 +14,12 @@
 
 int main(int argc, char** argv) {
 
-    // sudo ./sg_loader scatter_gather.bpf.o aggregation.bpf.o lo
-    sgbpf::Context ctx{argv[1], argv[2], argv[3]};
+    if (argc < 3) {
+        std::cerr << "Invalid usage. Correct usage: " << argv[0] << " <path/to/bpfobjs> <ifname>" << std::endl;
+        return 1;
+    }
+    // sudo ./sg_loader bpfobjs lo
+    sgbpf::Context ctx{argv[1], argv[2]};
 
     auto workers = sgbpf::Worker::fromFile("workers.cfg");
     sgbpf::Service service{ctx, workers};

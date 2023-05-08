@@ -1,5 +1,5 @@
-#ifndef _EBPFPP_HOOK_H
-#define _EBPFPP_HOOK_H
+#ifndef _SGBPF_EBPF_HOOK_H
+#define _SGBPF_EBPF_HOOK_H
 
 #include <string>
 
@@ -61,4 +61,4 @@ struct SocketHook
 
 } // close namespace ebpf
 
-#endif // !_EBPFPP_HOOK_H
+#endif // !_SGBPF_EBPF_HOOK_H

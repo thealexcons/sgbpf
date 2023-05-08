@@ -6,11 +6,11 @@
 #include <sstream>
 #include <fstream>
 
-#include "ebpfpp/Program.h"
-#include "ebpfpp/Map.h"
-#include "ebpfpp/Object.h"
-#include "ebpfpp/Util.h"
-#include "ebpfpp/Hook.h"
+#include "sgbpf/ebpf/Program.h"
+#include "sgbpf/ebpf/Map.h"
+#include "sgbpf/ebpf/Object.h"
+#include "sgbpf/ebpf/Util.h"
+#include "sgbpf/ebpf/Hook.h"
 
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>

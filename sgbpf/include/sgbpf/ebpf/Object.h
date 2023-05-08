@@ -1,5 +1,5 @@
-#ifndef _EBPFPP_OBJECT_H
-#define _EBPFPP_OBJECT_H
+#ifndef _SGBPF_EBPF_OBJECT_H
+#define _SGBPF_EBPF_OBJECT_H
 
 #include <string>
 #include <vector>
@@ -51,4 +51,4 @@ private:
 
 } // close namespace ebpf
 
-#endif // !_EBPFPP_OBJECT_H
+#endif // !_SGBPF_EBPF_OBJECT_H

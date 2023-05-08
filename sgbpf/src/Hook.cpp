@@ -1,5 +1,5 @@
-#include "Hook.h"
-#include "Program.h"
+#include "ebpf/Hook.h"
+#include "ebpf/Program.h"
 
 #include <iostream>
 

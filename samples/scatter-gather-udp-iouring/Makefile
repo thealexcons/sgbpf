@@ -2,9 +2,9 @@ LIBBPF_HEADERS := ../../libbpf/src/root/usr/include/
 LIBBPF_HEADERS_DESTDIR := root
 LIBBPF_LIB_DIR  := ../../libbpf/src/
 
-LIBEBPFPP_DIR := ../../ebpfpp/
-LIBEBPFPP_HEADERS := ../../ebpfpp/include/
-LIBEBPFPP_LIB_DIR := ../../ebpfpp/lib/
+LIBEBPFPP_DIR := ../../sgbpf/
+LIBEBPFPP_HEADERS := ../../sgbpf/include/
+LIBEBPFPP_LIB_DIR := ../../sgbpf/lib/
 
 LOADER := loader
 SG_LOADER := sg_loader
@@ -26,11 +26,11 @@ deinstall:
 
 
 $(LOADER): loader.cpp
-	g++ -std=c++17 -fsanitize=address -I$(LIBEBPFPP_HEADERS) -I$(LIBBPF_HEADERS) -L$(LIBEBPFPP_LIB_DIR) -L$(LIBBPF_LIB_DIR) -g -Wall $^ -o $@ -lbpf -lebpfpp -luring -lpthread
+	g++ -std=c++17 -fsanitize=address -I$(LIBEBPFPP_HEADERS) -I$(LIBBPF_HEADERS) -L$(LIBEBPFPP_LIB_DIR) -L$(LIBBPF_LIB_DIR) -g -Wall $^ -o $@ -lbpf -lsgbpf -luring
 
 
 $(SG_LOADER): sg_loader.cpp
-	g++ -std=c++17  -fsanitize=address -I$(LIBEBPFPP_HEADERS) -I$(LIBBPF_HEADERS) -L$(LIBEBPFPP_LIB_DIR) -L$(LIBBPF_LIB_DIR) -g -Wall $^ -o $@ -lbpf -lebpfpp -luring -lpthread
+	g++ -std=c++17  -fsanitize=address -I$(LIBEBPFPP_HEADERS) -I$(LIBBPF_HEADERS) -L$(LIBEBPFPP_LIB_DIR) -L$(LIBBPF_LIB_DIR) -g -Wall $^ -o $@ -lbpf -lsgbpf -luring -lpthread
 
 
 $(BPF_PROG): scatter_gather.bpf.c

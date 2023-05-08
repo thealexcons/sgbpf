@@ -1,5 +1,5 @@
-#ifndef _EBPFPP_MAP_H
-#define _EBPFPP_MAP_H
+#ifndef _SGBPF_EBPF_MAP_H
+#define _SGBPF_EBPF_MAP_H
 
 #include <string>
 
@@ -63,4 +63,4 @@ private:
 
 } // close namespace ebpf
 
-#endif // !_EBPFPP_MAP_H
+#endif // !_SGBPF_EBPF_MAP_H

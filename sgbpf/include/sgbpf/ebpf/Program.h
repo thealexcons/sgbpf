@@ -1,5 +1,5 @@
-#ifndef _EBPFPP_PROGRAM_H
-#define _EBPFPP_PROGRAM_H
+#ifndef _SGBPF_EBPF_PROGRAM_H
+#define _SGBPF_EBPF_PROGRAM_H
 
 #include <string>
 
@@ -41,4 +41,4 @@ private:
 
 } // close namespace ebpf
 
-#endif // !_EBPFPP_PROGRAM_H
+#endif // !_SGBPF_EBPF_PROGRAM_H

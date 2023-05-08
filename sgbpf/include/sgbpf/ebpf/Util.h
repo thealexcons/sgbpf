@@ -1,5 +1,5 @@
-#ifndef _EBPFPP_UTIL_H
-#define _EBPFPP_UTIL_H
+#ifndef _SGBPF_EBPF_UTIL_H
+#define _SGBPF_EBPF_UTIL_H
 
 #include "Program.h"
 
@@ -21,4 +21,4 @@ struct Util {
 
 } // close namespace ebpf
 
-#endif // !_EBPFPP_UTIL_H
+#endif // !_SGBPF_EBPF_UTIL_H

@@ -14,7 +14,7 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
 
-#include "common.h"
+#include "Common.h"
 #include "maps.bpf.h"
 
 #define MOD_POW2(x, y) (x & (y - 1))
@@ -109,15 +109,10 @@ struct aggregation_prog_ctx {
 
 #define AGGREGATION_PROG_OUTRO(ctx) { \
     bpf_spin_unlock(ctx.lock); \
-    here++;\
-    bpf_printk("here = %d", here);\
     int act; \
     if ((act = post_aggregation_process(ctx.xdp_ctx, ctx.pk_msg)) != XDP_PASS) \
         return act; \
     return XDP_PASS; \
 }
-
-
-
 
 #endif // HELPERS_BPF_H

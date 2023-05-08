@@ -25,6 +25,8 @@ int aggregation_prog(struct xdp_md* xdp_ctx) {
     struct aggregation_prog_ctx ctx;
     AGGREGATION_PROG_INTRO(ctx, xdp_ctx);
 
+    static int here = 0;
+
     // perform aggregation logic here...
     for (__u32 i = 0; i < RESP_MAX_VECTOR_SIZE; ++i) {
         ctx.current_value[i] += ((RESP_VECTOR_TYPE*)ctx.pk_msg->body)[i];

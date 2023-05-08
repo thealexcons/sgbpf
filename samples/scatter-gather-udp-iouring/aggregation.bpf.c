@@ -48,6 +48,8 @@ int aggregation_prog(struct xdp_md* xdp_ctx) {
     //      cleanup state in the ebpf program (unoptimised path)
     //  this is essentially done, except the time out cleanup
 
+    // FIX RACE CONDITION FOR COUNT ATOMICS
+
     // two options:
     //  eager cleanup: cleanup required map state once the request finishes
     //      // probably faster, as it avoids duplicate map lookups

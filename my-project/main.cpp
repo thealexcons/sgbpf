@@ -20,7 +20,22 @@ int main(int argc, char** argv) {
         return 1;
     }
     // sudo ./sg_program bpfobjs lo
-    sgbpf::Context ctx{argv[1], argv[2]};
+
+    // Standard method (BPF program)
+    // Using make --directory=../sgbpf bpf
+    sgbpf::ContextParams ctxParams;
+    ctxParams.bpfObjsPath = argv[1];
+    ctxParams.customAggregationMode = sgbpf::AggregationMode::Program;
+    ctxParams.ifname = argv[2];
+    sgbpf::Context ctx{ctxParams};
+
+    // Using the alternative method (regular C function for custom aggregation)
+    // Using make --directory=../sgbpf bpf_func
+    // sgbpf::ContextParams ctxParams;
+    // ctxParams.bpfObjsPath = argv[1];
+    // ctxParams.customAggregationMode = sgbpf::AggregationMode::Function;
+    // ctxParams.ifname = argv[2];
+    // sgbpf::Context ctx{ctxParams};
 
     auto workers = sgbpf::Worker::fromFile("workers.cfg");
     sgbpf::Service service{ctx, workers};

@@ -14,6 +14,17 @@
 
 namespace sgbpf {
 
+enum class AggregationMode {
+    Program,
+    Function
+};
+
+struct ContextParams {
+    const char*     bpfObjsPath;
+    const char*     ifname;
+    AggregationMode customAggregationMode = AggregationMode::Program;
+};
+
 class Context
 {
 private:
@@ -47,7 +58,7 @@ private:
     constexpr static const auto ZERO = 0;
 
 public:
-    Context(const char* bpfObjsPath, const char* ifname);
+    Context(const ContextParams& params);
     ~Context();
 
     void setScatterPort(uint16_t port);

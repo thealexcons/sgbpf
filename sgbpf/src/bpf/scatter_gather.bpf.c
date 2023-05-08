@@ -13,11 +13,10 @@
 #include "bpf_h/helpers.bpf.h"
 #include "bpf_h/maps.bpf.h"
 
-// #define CUSTOM_AGGREGATION 1
 
-#ifdef CUSTOM_AGGREGATION
-#include "custom_aggregation.bpf.h"
-#endif // CUSTOM_AGGREGATION
+#ifdef CUSTOM_AGGREGATION_FUNC
+#include "bpf_h/custom_aggregation_function.bpf.h"
+#endif // CUSTOM_AGGREGATION_FUNC
 
 static const __u32 ZERO_IDX = 0;
 
@@ -381,18 +380,30 @@ int gather_prog(struct xdp_md* ctx) {
         #endif
         return XDP_DROP;
     }
-  
-    bpf_tail_call(ctx, &map_aggregation_progs, CUSTOM_AGGREGATION_PROG);
 
     // DISCUSS: for performance, maybe just treat it as a function instead
     // of a full program change to avoid overhead of re-parsing packet
     // as a raw function call, this works
-#ifdef CUSTOM_AGGREGATION
-    aggregate(resp_msg, agg_resp);
-    AGGREGATION_PROG_OUTRO(resp_msg);
-#endif // CUSTOM_AGGREGATION
 
+#ifndef CUSTOM_AGGREGATION_FUNC
+    // Standard method: use BPF program defined in separate object file
+    bpf_tail_call(ctx, &map_aggregation_progs, CUSTOM_AGGREGATION_PROG);
+    return XDP_PASS;
+#else
+    // Alternative method: use regular function call defined in supplied header file
+    struct aggregation_entry* agg_entry = bpf_map_lookup_elem(&map_aggregated_response, &slot);
+    if (!agg_entry)
+        return XDP_ABORTED;
 
+    bpf_spin_lock(&agg_entry->lock);
+    enum xdp_action act = aggregate(resp_msg, agg_entry->data);
+    bpf_spin_unlock(&agg_entry->lock);
+    if (act != XDP_PASS)
+        return act;
+    return post_aggregation_process(ctx, resp_msg);
+#endif // CUSTOM_AGGREGATION_FUNC
+
+/*
 #ifdef VECTOR_RESPONSE
 
     RESP_VECTOR_TYPE* agg_resp = bpf_map_lookup_elem(&map_aggregated_response, &ZERO_IDX);
@@ -419,10 +430,7 @@ int gather_prog(struct xdp_md* ctx) {
     bpf_map_update_elem(&map_aggregated_response, &ZERO_IDX, &updated_resp, 0);
 
 #endif
-
-    // this macro is outdated and only suited for the custom prog
-    // AGGREGATION_PROG_OUTRO(ctx, resp_msg); 
-    return XDP_PASS;
+*/
 }
 
 

@@ -18,6 +18,9 @@ namespace {
 
 // CONSTRUCTORS
 Object::Object(const std::string& path) {
+    if (path.empty())
+        return;
+        
     d_object = bpf_object__open(path.c_str());
     const auto err = libbpf_get_error(d_object);
     if (err) {

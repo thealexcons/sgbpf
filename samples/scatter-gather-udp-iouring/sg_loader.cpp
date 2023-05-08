@@ -21,7 +21,11 @@ int main(int argc, char** argv) {
     // ScatterGather::init("scatter_gather.json");
     
     // sudo ./sg_loader . lo
-    sgbpf::Context ctx{argv[1], argv[2]};
+    sgbpf::ContextParams params;
+    params.bpfObjsPath = argv[1];
+    params.customAggregationMode = sgbpf::AggregationMode::Program;
+    params.ifname = argv[2];
+    sgbpf::Context ctx{params};
 
     auto workers = sgbpf::Worker::fromFile("worker/workers.cfg");
     sgbpf::Service service{ctx, workers};

@@ -29,15 +29,10 @@ static const __u32 ZERO_IDX = 0;
 #define SG_MSG_BODY_OFF (ETH_HLEN + sizeof(struct iphdr) + sizeof(struct udphdr) + offsetof(sg_msg_t, body))
 
 static void __always_inline clone_and_send_packet(struct __sk_buff* skb, 
-                                                  struct iphdr* iph, 
-                                                  struct udphdr* udph,
                                                   uint32_t worker_ip,   // Network byte order
                                                   uint16_t worker_port, // Network byte order
                                                   uint16_t app_port)    // Network byte order
 {
-    (void) iph;
-    (void) udph;
-
     #ifdef BPF_DEBUG_PRINT
     char str[16] = "";
     __u32 ip_addr_h = bpf_ntohl(worker_ip);
@@ -68,17 +63,15 @@ static void __always_inline clone_and_send_packet(struct __sk_buff* skb,
 
 struct send_worker_ctx {
     struct __sk_buff* skb;
-    struct iphdr* ip_header;
-    struct udphdr* udp_header;
 };
 
-static __u64 send_worker(void* map, __u32* idx, worker_info_t* worker, struct send_worker_ctx* data) {    
+static __u64 send_worker(void* map, __u32* idx, worker_info_t* worker, struct send_worker_ctx* ctx) {    
     // Non-populated map entries are zero, so stop iterating if we encounter 0
     // return 1 means the iteration should stop
     if (!worker || (worker->worker_ip == 0 || worker->worker_port == 0))
         return 1;
 
-    clone_and_send_packet(data->skb, data->ip_header, data->udp_header, worker->worker_ip, worker->worker_port, worker->app_port);
+    clone_and_send_packet(ctx->skb, worker->worker_ip, worker->worker_port, worker->app_port);
     return 0;   // Continue to next worker destination (return 0)
 }
 
@@ -238,8 +231,6 @@ int scatter_prog(struct __sk_buff* skb) {
         // Clone the outgoing packet to all the registered workers
         struct send_worker_ctx data = {
             .skb = skb,
-            .ip_header = iph,
-            .udp_header = udph,
         };
         bpf_for_each_map_elem(&map_workers, send_worker, &data, 0);
 

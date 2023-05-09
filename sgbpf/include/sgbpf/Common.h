@@ -90,4 +90,12 @@ typedef enum msg_type
     GATHER_MSG
 } msg_type_t;
 
+
+#define SG_CLEAN_REQ_MSG_MAGIC 0x649CB338
+
+typedef struct __attribute__((packed)) sg_clean_req_msg {
+    unsigned int    magic;
+    unsigned int    req_id;    
+} sg_clean_req_msg_t; 
+
 #endif // _SGBPF_COMMON_H

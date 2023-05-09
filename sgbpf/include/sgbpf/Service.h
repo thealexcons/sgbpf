@@ -48,6 +48,8 @@ public:
 
     void processEvents(int requestID = DEFAULT_REQUEST_ID);
 
+    void freeRequest(Request* req, bool immediate = false);
+
 private:
 
     void processPendingEvents(int requestID);

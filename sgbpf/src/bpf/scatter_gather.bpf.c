@@ -82,13 +82,52 @@ static __u64 send_worker(void* map, __u32* idx, worker_info_t* worker, struct se
     return 0;   // Continue to next worker destination (return 0)
 }
 
-// static const char* SCATTER_MSG = "SCATTER";
-// static const __u32 SCATTER_MSG_LEN = 7;
+static __always_inline void reset_aggregated_vector(RESP_VECTOR_TYPE* agg_vector) {
+    // ebpf sets a maximum size for memset, so we need to "hack" around it
+    #define MAX_CONTIGUOUS_MEMSET_SIZE 256
+
+    #pragma clang loop unroll(full)
+    for (__u32 i = 0; i < RESP_MAX_VECTOR_SIZE; ++i) {
+        if (__glibc_unlikely(MOD_POW2(i, MAX_CONTIGUOUS_MEMSET_SIZE) == 0)) {
+            asm volatile("" ::: "memory"); // dummy instruction needed to break the memset, need something cheap
+        }
+        agg_vector[i] = 0;
+    }
+}
+
+static inline int handle_clean_req_msg(char* payload, __u32 payload_size, void* data_end) {
+
+    sg_clean_req_msg_t* clean_msg = (sg_clean_req_msg_t*) payload;
+    if (clean_msg->magic != SG_CLEAN_REQ_MSG_MAGIC)
+        return TC_ACT_OK;
+
+    __u32 slot = GET_REQ_MAP_SLOT(clean_msg->req_id);
+
+    bpf_printk("Got cleanup msg for req id %d (with slot %d)", clean_msg->req_id, slot);
+    
+    // reset the stale count
+    __s64* count = bpf_map_lookup_elem(&map_workers_resp_count, &slot);
+    if (!count)
+        return XDP_ABORTED;
+    __atomic_exchange_n(count, 0, __ATOMIC_SEQ_CST);
+
+    // reset the stale aggregated data
+    struct aggregation_entry* agg_entry = bpf_map_lookup_elem(&map_aggregated_response, &slot);
+    if (!agg_entry)
+        return TC_ACT_SHOT;
+    bpf_spin_lock(&agg_entry->lock);
+    reset_aggregated_vector(agg_entry->data);
+    bpf_spin_unlock(&agg_entry->lock);
+
+    return TC_ACT_SHOT;
+}
 
 
 SEC("tc")
 int scatter_prog(struct __sk_buff* skb) {
-	void* data = (void *)(long)skb->data;
+    // START_TIMER("scatter_prog");
+	
+    void* data = (void *)(long)skb->data;
 	void* data_end = (void *)(long)skb->data_end;
 	struct ethhdr* ethh;
 	struct iphdr* iph;
@@ -134,15 +173,20 @@ int scatter_prog(struct __sk_buff* skb) {
     if (udph->dest == udph->source && udph->source == *local_application_port) {
         
         __u32 payload_size = bpf_ntohs(udph->len) - sizeof(struct udphdr);
+        char* payload = (char*) udph + sizeof(struct udphdr);
+
         // Note: this equality is needed so that the comparison size is known
         // at compile-time for the loop unrolling.
-        if (payload_size != sizeof(sg_msg_t))
+        if (payload_size != sizeof(sg_msg_t)) {
+            if (payload_size == sizeof(sg_clean_req_msg_t) && !((void*) payload + payload_size > data_end)) {
+                return handle_clean_req_msg(payload, payload_size, data_end);
+            }
             return TC_ACT_OK;
+        }
 
-        char* payload = (char*) udph + sizeof(struct udphdr);
-        if ((void*) payload + payload_size > data_end) {
+        if (((void*) payload + payload_size > data_end)) {
             // data_end - data = MTU size + ETH_HDR (14 bytes)
-            bpf_printk("Invalid packet size: payload might be larger than MTU");
+            bpf_printk("Invalid packet size: payload might be larger than MTU?");
             return TC_ACT_OK;
         }
 
@@ -167,13 +211,6 @@ int scatter_prog(struct __sk_buff* skb) {
         if (!cpi)
             return XDP_ABORTED;
 
-        // Lazy cleanup of map entry if previous entry used the SG_MSG_F_WAIT_ANY policy
-        // if (__glibc_unlikely(cpi->policy == SG_MSG_F_WAIT_ANY)) {
-        //     __u64* count = bpf_map_lookup_elem(&map_workers_resp_count, &slot);
-        //     if (!count)
-        //         return XDP_ABORTED;
-        //     *count = 0; // UB if num active requests > MAX_ACTIVE_REQUESTS
-        // }
         cpi->policy = sgh->hdr.flags;
         cpi->waitN = (sgh->hdr.flags == SG_MSG_F_WAIT_N || sgh->hdr.flags == SG_MSG_F_WAIT_ALL) ? sgh->hdr.num_pks : 0;
 
@@ -205,6 +242,8 @@ int scatter_prog(struct __sk_buff* skb) {
             .udp_header = udph,
         };
         bpf_for_each_map_elem(&map_workers, send_worker, &data, 0);
+
+        // END_TIMER();
 
 #ifdef BPF_DEBUG_PRINT
         bpf_printk("Finished SCATTER request");
@@ -261,18 +300,6 @@ int scatter_prog(struct __sk_buff* skb) {
 //     return (bpf_ktime_get_ns() - rqt->start_ns > rqt->timeout_ns);
 // } 
 
-inline static void reset_aggregated_vector(RESP_VECTOR_TYPE* agg_vector) {
-    // ebpf sets a maximum size for memset, so we need to "hack" around it
-    #define MAX_CONTIGUOUS_MEMSET_SIZE 256
-
-    #pragma clang loop unroll(full)
-    for (__u32 i = 0; i < RESP_MAX_VECTOR_SIZE; ++i) {
-        if (__glibc_unlikely(MOD_POW2(i, MAX_CONTIGUOUS_MEMSET_SIZE) == 0)) {
-            asm volatile("" ::: "memory"); // dummy instruction needed to break the memset, need something cheap
-        }
-        agg_vector[i] = 0;
-    }
-}
 
 SEC("xdp")
 int gather_prog(struct xdp_md* ctx) {
@@ -434,7 +461,7 @@ int gather_prog(struct xdp_md* ctx) {
 }
 
 
-static inline __u8 num_workers_satisfied(struct completion_policy_info* cpi, __s64* global_count, __u32* pk_count) {
+static __always_inline __u8 num_workers_satisfied(struct completion_policy_info* cpi, __s64* global_count, __u32* pk_count) {
     // The response count is set to the max negative number so that any packets
     // of the same request currently in-flight cannot reach the target count again
     

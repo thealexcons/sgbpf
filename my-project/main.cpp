@@ -20,8 +20,10 @@ int main(int argc, char** argv) {
         return 1;
     }
     // sudo ./sg_program bpfobjs lo
+    // export OUTPUT_BPF_OBJ_DIR=$(pwd)/bpfobjs
 
     // Standard method (BPF program)
+    // export CUSTOM_AGGREGATION_BPF_PROG=$(pwd)/custom_aggregation.bpf.c
     // Using make --directory=../sgbpf bpf
     sgbpf::ContextParams ctxParams;
     ctxParams.bpfObjsPath = argv[1];
@@ -30,6 +32,7 @@ int main(int argc, char** argv) {
     sgbpf::Context ctx{ctxParams};
 
     // Using the alternative method (regular C function for custom aggregation)
+    // export CUSTOM_AGGREGATION_FUNCTION=$(pwd)/custom_agg_func.bpf.h
     // Using make --directory=../sgbpf bpf_func
     // sgbpf::ContextParams ctxParams;
     // ctxParams.bpfObjsPath = argv[1];
@@ -64,4 +67,6 @@ int main(int argc, char** argv) {
     }
 
     std::cout << "Got a total of " << req->bufferPointers().size() << std::endl;
+
+    service.freeRequest(req, true);
 }

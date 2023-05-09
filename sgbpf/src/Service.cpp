@@ -312,4 +312,30 @@ void Service::processPendingEvents(int requestID) {
     }
 }
 
+
+void Service::freeRequest(Request* req, bool immediate) {
+    sg_clean_req_msg_t cleanMsg = {
+        .magic = SG_CLEAN_REQ_MSG_MAGIC,
+        .req_id = static_cast<unsigned int>(req->id()),
+    };
+    struct iovec iov = {
+		.iov_base = &cleanMsg,
+		.iov_len = sizeof(sg_clean_req_msg_t),
+	};
+
+	struct msghdr msgh;
+    memset(&msgh, 0, sizeof(msgh));
+	msgh.msg_name = &d_scatterSkAddr;
+	msgh.msg_namelen = sizeof(sockaddr_in);
+	msgh.msg_iov = &iov;
+	msgh.msg_iovlen = 1;
+
+    io_uring_sqe *sqe = io_uring_get_sqe(&d_ioCtx.ring);
+    io_uring_prep_sendmsg(sqe, d_scatterSkFd, &msgh, 0);
+    io_uring_sqe_set_flags(sqe, 0);
+
+    if (immediate)
+        io_uring_submit(&d_ioCtx.ring);
+}
+
 } // close namespace sgbpf

@@ -68,13 +68,13 @@ bpf: $(SRC_DIR)/bpf/scatter_gather.bpf.c
 
 	# Build main BPF object file
 	echo "[1/2] Building main eBPF object file..."
-	clang-12 -target bpf -I$(INC_DIR) -D BPF_DEBUG_PRINT -D BPF_DEBUG_PRINT -g -O2 -c $^ -o $(BPF_PROG) || exit
+	clang-12 -target bpf -I$(INC_DIR) -D __BPF_TRACING__ -D BPF_DEBUG_PRINT -g -O2 -c $^ -o $(BPF_PROG) || exit
 	mv $(BPF_PROG) ${OUTPUT_BPF_OBJ_DIR}
 	echo "[1/2] Built eBPF object file and placed under ${OUTPUT_BPF_OBJ_DIR}\n"
 
 	# Build custom aggregation BPF object file
 	echo "[2/2] Building custom aggregation eBPF program..."
-	clang-12 -target bpf -I$(INC_DIR) -D BPF_DEBUG_PRINT -D BPF_DEBUG_PRINT -g -O2 -c ${CUSTOM_AGGREGATION_BPF_PROG} -o $(AGGREGATION_BPF_PROG) || exit
+	clang-12 -target bpf -I$(INC_DIR) -D __BPF_TRACING__ -D BPF_DEBUG_PRINT -g -O2 -c ${CUSTOM_AGGREGATION_BPF_PROG} -o $(AGGREGATION_BPF_PROG) || exit
 	mv $(AGGREGATION_BPF_PROG) ${OUTPUT_BPF_OBJ_DIR}
 	echo "[2/2] Built custom aggregation eBPF program and placed under ${OUTPUT_BPF_OBJ_DIR}\n"
 	echo "BPF OBJECT FILES BUILT"
@@ -90,7 +90,7 @@ bpf_func: $(SRC_DIR)/bpf/scatter_gather.bpf.c
 	# Build main BPF object file with the custom aggregation function in supplied header file
 	echo "Building main eBPF object file with custom function..."
 	cp ${CUSTOM_AGGREGATION_FUNCTION} ${INC_DIR}/bpf_h/custom_aggregation_function.bpf.h
-	clang-12 -target bpf -I$(INC_DIR) -D BPF_DEBUG_PRINT -D BPF_DEBUG_PRINT -D CUSTOM_AGGREGATION_FUNC -g -O2 -c $^ -o $(BPF_PROG) || exit
+	clang-12 -target bpf -I$(INC_DIR) -D __BPF_TRACING__ -D BPF_DEBUG_PRINT -D CUSTOM_AGGREGATION_FUNC -g -O2 -c $^ -o $(BPF_PROG) || exit
 	mv $(BPF_PROG) ${OUTPUT_BPF_OBJ_DIR}
 	echo "Built eBPF object file and placed under ${OUTPUT_BPF_OBJ_DIR}\n"
 

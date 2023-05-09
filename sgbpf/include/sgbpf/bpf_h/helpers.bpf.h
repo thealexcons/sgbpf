@@ -115,4 +115,19 @@ struct aggregation_prog_ctx {
     return XDP_PASS; \
 }
 
+
+struct timer {
+    const char* name;
+    __u64       start_ns;
+};
+#define START_TIMER(prog_name) \
+    struct timer __START_TIMER_timer; \
+    __START_TIMER_timer.name = prog_name; \
+    __START_TIMER_timer.start_ns = bpf_ktime_get_ns();
+
+#define END_TIMER() { \
+    __u64 time_ns = bpf_ktime_get_ns() - __START_TIMER_timer.start_ns; \
+    bpf_printk("Elapsed time for '%s': %d ns (%d us)", __START_TIMER_timer.name, time_ns, time_ns / 1000); \
+}
+
 #endif // HELPERS_BPF_H

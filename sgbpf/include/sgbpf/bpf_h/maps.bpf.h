@@ -47,6 +47,8 @@ struct {
 
 
 // Hash set of workers (used for ingress gathering)
+
+// TODO can we avoid using HASH? ARRAY proven to be much faster? use req ID somehow?
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __type(key, worker_info_t);
@@ -55,41 +57,43 @@ struct {
 } map_workers_resp_status SEC(".maps");
 
 // Stores the timing information about requests for handling time outs
-struct req_timing {
-    __u64 start_ns;
-    __u64 timeout_ns;
+// struct req_timing {
+//     __u64 start_ns;
+//     __u64 timeout_ns;
+// };
+// struct {
+//     __uint(type, BPF_MAP_TYPE_ARRAY);
+//     __type(key, __u32);
+//     __type(value, struct req_timing);
+//     __uint(max_entries, MAX_ACTIVE_REQUESTS_ALLOWED);
+// } map_req_timing SEC(".maps");
+
+
+struct req_state {
+    __s64                count;         // Num responses received
+    struct bpf_spin_lock count_lock;    // Lock to R/W to count variable
+    __u32                num_workers;   // Num workers to wait for completion
+    __u8                 complete;
+    sg_msg_flags_t       policy;        // Completion policy (NOT NEEDED)
 };
+
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __type(key, __u32);
-    __type(value, struct req_timing);
-    __uint(max_entries, MAX_ACTIVE_REQUESTS_ALLOWED);
-} map_req_timing SEC(".maps");
-
-
-// consider handling all per-request maps together???
-struct completion_policy_info {
-    sg_msg_flags_t  policy;
-    __u32           waitN;
-};
-
-struct {
-    __uint(type, BPF_MAP_TYPE_ARRAY);
-    __type(key, __u32);
-    __type(value, struct completion_policy_info);
+    __type(value, struct req_state);
     __uint(max_entries, MAX_ACTIVE_REQUESTS_ALLOWED);
     __uint(pinning, LIBBPF_PIN_BY_NAME);
-} map_req_completion_policy SEC(".maps");
+} map_req_state SEC(".maps");
 
 // Stores the number of packets received for each request ID
 
-struct {
-    __uint(type, BPF_MAP_TYPE_ARRAY);
-    __type(key, __u32);
-    __type(value, __s64);
-    __uint(max_entries, MAX_ACTIVE_REQUESTS_ALLOWED);
-    __uint(pinning, LIBBPF_PIN_BY_NAME);
-} map_workers_resp_count SEC(".maps");
+// struct {
+//     __uint(type, BPF_MAP_TYPE_ARRAY);
+//     __type(key, __u32);
+//     __type(value, __s64);
+//     __uint(max_entries, MAX_ACTIVE_REQUESTS_ALLOWED);
+//     __uint(pinning, LIBBPF_PIN_BY_NAME);
+// } map_workers_resp_count SEC(".maps");
 
 // The total current value of the aggregated responses
 struct aggregation_entry {

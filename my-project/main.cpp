@@ -92,7 +92,7 @@ int main(int argc, char** argv) {
     // EXAMPLE 1: Vector-based data (with in-kernel aggregation)
     sgbpf::ReqParams params; // set params here....
     params.completionPolicy = sgbpf::GatherCompletionPolicy::WaitAny;
-    params.numWorkersToWait = 10;
+    params.numWorkersToWait = 1;
     params.timeout = std::chrono::microseconds{100*1000}; // 10 ms
     
     // std::vector<uint64_t> times;
@@ -125,10 +125,11 @@ int main(int argc, char** argv) {
     
     auto aggregatedData = (uint32_t*)(buf.body);
     std::cout << "control socket packet received\n";
-    for (auto i = 0u; i < RESP_MAX_VECTOR_SIZE; i++) {
-        if (i % 25 == 0)
-            std::cout << "vec[" << i << "] = " << aggregatedData[i] << std::endl;
-    }
+    // for (auto i = 0u; i < RESP_MAX_VECTOR_SIZE; i++) {
+    //     if (i % 25 == 0)
+    //         std::cout << "vec[" << i << "] = " << aggregatedData[i] << std::endl;
+    // }
+    std::cout << "vec[" << 300 << "] = " << aggregatedData[300] << std::endl;
 
     std::cout << "Got a total of " << req->bufferPointers().size() << std::endl;
 

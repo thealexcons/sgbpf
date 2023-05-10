@@ -19,7 +19,7 @@
 
 #define MOD_POW2(x, y) (x & (y - 1))
 #define GET_REQ_MAP_SLOT(req_id) MOD_POW2(req_id, MAX_ACTIVE_REQUESTS_ALLOWED)
-#define ATOMIC_LOAD_S64(ptr, dest) asm volatile("lock *(i64 *)(%0+0) += %1" : "=r"(dest) : "r"(ZERO_IDX), "0"(ptr));
+// #define ATOMIC_LOAD_S64(ptr, dest) asm volatile("lock *(i64 *)(%0+0) += %1" : "=r"(dest) : "r"(ZERO_IDX), "0"(ptr));
 
 static inline enum xdp_action parse_msg_xdp(struct xdp_md* ctx, sg_msg_t** msg) {
     void* data = (void *)(long)ctx->data;
@@ -56,30 +56,32 @@ static inline enum xdp_action parse_msg_xdp(struct xdp_md* ctx, sg_msg_t** msg) 
     return XDP_PASS;
 }
 
-static inline enum xdp_action post_aggregation_process(struct xdp_md* ctx, sg_msg_t* resp_msg) {
+static __always_inline enum xdp_action post_aggregation_process(struct xdp_md* ctx, sg_msg_t* resp_msg) {
     // Set the flag in the payload for the upper layer programs
     resp_msg->hdr.flags = SG_MSG_F_PROCESSED;
 
     // Increment received packet count for the request
-    __u32 slot = GET_REQ_MAP_SLOT(resp_msg->hdr.req_id);
+    // __u32 slot = GET_REQ_MAP_SLOT(resp_msg->hdr.req_id);
 
-    __s64* count = bpf_map_lookup_elem(&map_workers_resp_count, &slot);
-    if (!count)
-        return XDP_ABORTED;
+    // struct req_state* rs = bpf_map_lookup_elem(&map_req_state, &slot);
+    // if (!rs)
+    //     return XDP_ABORTED;
 
-    __s64 pk_count = __atomic_add_fetch(count, 1, __ATOMIC_SEQ_CST);
+    // bpf_spin_lock(&rs->count_lock);
+    // __s64 pk_count = ++rs->count;
+    // bpf_spin_unlock(&rs->count_lock);
 
-    // Device drivers not supporting data_meta will fail here
-    if (bpf_xdp_adjust_meta(ctx, -(int) sizeof(__u32)) < 0)
-        return XDP_ABORTED;
+    // // Device drivers not supporting data_meta will fail here
+    // if (bpf_xdp_adjust_meta(ctx, -(int) sizeof(__u32)) < 0)
+    //     return XDP_ABORTED;
 
-    void* data = (void*)(unsigned long) ctx->data;
-    __u32* pk_count_meta;
-    pk_count_meta = (void*)(unsigned long) ctx->data_meta;
-    if (pk_count_meta + 1 > data)
-        return XDP_ABORTED;
+    // void* data = (void*)(unsigned long) ctx->data;
+    // __u32* pk_count_meta;
+    // pk_count_meta = (void*)(unsigned long) ctx->data_meta;
+    // if (pk_count_meta + 1 > data)
+    //     return XDP_ABORTED;
 
-    *pk_count_meta = (__u32) pk_count;
+    // *pk_count_meta = (__u32) pk_count;
     
     return XDP_PASS;
 }
@@ -104,6 +106,11 @@ struct aggregation_prog_ctx {
         return XDP_ABORTED; \
     ctx.current_value = agg_entry->data; \
     ctx.lock = &agg_entry->lock; \
+    __u32* pk_count = (void*)(unsigned long) xdp_ctx->data_meta; \
+    if (pk_count + 1 > (void*)(unsigned long) xdp_ctx->data) { \
+        return XDP_ABORTED; \
+    } \
+    bpf_printk("starting aggregation with pk %d", *pk_count); \
     bpf_spin_lock(ctx.lock); \
 }
 

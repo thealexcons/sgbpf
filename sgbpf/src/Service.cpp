@@ -175,7 +175,7 @@ Request* Service::scatter(const char* msg, size_t len, ReqParams params)
     }
 
     unsigned char msgFlags = static_cast<int>(params.completionPolicy);
-    uint32_t num_pks = 0; // the num of workers to wait for
+    uint32_t num_pks = 1; // the num of workers to wait for (default is 1)
     if (params.completionPolicy == GatherCompletionPolicy::WaitN) {
         params.numWorkersToWait = std::min(params.numWorkersToWait, (uint32_t) d_workers.size());
         num_pks = params.numWorkersToWait;

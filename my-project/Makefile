@@ -32,6 +32,5 @@ clean:
 	rm -f $(SG_PROGRAM)
 
 reset_maps:
-	sudo rm /sys/fs/bpf/map_workers_resp_count
+	sudo rm /sys/fs/bpf/map_req_state
 	sudo rm /sys/fs/bpf/map_aggregated_response
-	sudo rm /sys/fs/bpf/map_req_completion_policy

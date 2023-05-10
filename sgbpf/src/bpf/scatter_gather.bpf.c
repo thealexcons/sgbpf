@@ -99,10 +99,14 @@ static inline int handle_clean_req_msg(char* payload, __u32 payload_size, void* 
     bpf_printk("Got cleanup msg for req id %d (with slot %d)", clean_msg->req_id, slot);
     
     // reset the stale count
-    __s64* count = bpf_map_lookup_elem(&map_workers_resp_count, &slot);
-    if (!count)
+    struct req_state* rs = bpf_map_lookup_elem(&map_req_state, &slot);
+    if (!rs)
         return XDP_ABORTED;
-    __atomic_exchange_n(count, 0, __ATOMIC_SEQ_CST);
+
+    bpf_spin_lock(&rs->count_lock); // probably not needed, as it won't be under contention
+    rs->count = 0;
+    rs->complete = 0;
+    bpf_spin_unlock(&rs->count_lock);
 
     // reset the stale aggregated data
     struct aggregation_entry* agg_entry = bpf_map_lookup_elem(&map_aggregated_response, &slot);
@@ -115,6 +119,39 @@ static inline int handle_clean_req_msg(char* payload, __u32 payload_size, void* 
     return TC_ACT_SHOT;
 }
 
+// static __always_inline __u8 num_workers_satisfied(struct req_state* rs, __u32 pk_count) {
+//     // The response count is set to the max negative number so that any packets
+//     // of the same request currently in-flight cannot reach the target count again
+    
+//     __u8 ret = 0;
+//     // bpf_spin_lock(&rs->count_lock);
+
+//     if (rs->policy == SG_MSG_F_WAIT_ANY) {
+//         // bpf_spin_lock(&rs->count_lock);
+//         rs->count = -MAX_SOCKETS_ALLOWED;
+//         // bpf_spin_unlock(&rs->count_lock);
+//         ret = 1;
+//     }
+//     else if (rs->policy == SG_MSG_F_WAIT_ALL) {
+//         // bpf_spin_lock(&rs->count_lock);
+//         if (pk_count == rs->num_workers) {
+//             rs->count = -MAX_SOCKETS_ALLOWED;
+//             ret = 1;
+//         } 
+//         // bpf_spin_unlock(&rs->count_lock);
+//     }
+//     else if (rs->policy == SG_MSG_F_WAIT_N) {
+//         // bpf_spin_lock(&rs->count_lock);
+//         if (pk_count == rs->num_workers) {
+//             rs->count = -MAX_SOCKETS_ALLOWED;
+//             ret = 1;
+//         } 
+//         // bpf_spin_unlock(&rs->count_lock);
+//     }
+//     // bpf_spin_unlock(&rs->count_lock);
+//     rs->complete = ret;
+//     return ret;
+// }
 
 SEC("tc")
 int scatter_prog(struct __sk_buff* skb) {
@@ -196,26 +233,28 @@ int scatter_prog(struct __sk_buff* skb) {
         __u32 slot = GET_REQ_MAP_SLOT(sgh->hdr.req_id);
 
         // Reset count (NOTE: this must go here, NOT in the ctrl sk notification)
-        __s64* count = bpf_map_lookup_elem(&map_workers_resp_count, &slot);
-        if (!count)
-            return XDP_ABORTED;
-        __atomic_exchange_n(count, 0, __ATOMIC_SEQ_CST);
+        struct req_state* rs = bpf_map_lookup_elem(&map_req_state, &slot);
+        if (!rs)
+            return TC_ACT_SHOT;
+        bpf_spin_lock(&rs->count_lock);
+        rs->count = 0;
+        rs->complete = 0;
+        bpf_spin_unlock(&rs->count_lock);
 
-        struct completion_policy_info* cpi = bpf_map_lookup_elem(&map_req_completion_policy, &slot);
-        if (!cpi)
-            return XDP_ABORTED;
-
-        cpi->policy = sgh->hdr.flags;
-        cpi->waitN = (sgh->hdr.flags == SG_MSG_F_WAIT_N || sgh->hdr.flags == SG_MSG_F_WAIT_ALL) ? sgh->hdr.num_pks : 0;
+        rs->policy = sgh->hdr.flags; // THIS IS NOT EVEN NEEDED
+        // POLICY SIMPLY SETS THE NUM WORKERS IN USER SPACE, KERNEL ONLY NEEDS
+        // TO KNOW THE NUM WORKERS
+        rs->num_workers = sgh->hdr.num_pks;
 
         #ifdef BPF_DEBUG_PRINT
-        if (sgh->hdr.flags == SG_MSG_F_WAIT_ANY) {
-            bpf_printk("Got WAIT_ANY completion policy");
-        } else if (sgh->hdr.flags == SG_MSG_F_WAIT_N) {
-            bpf_printk("Got WAIT_N completion policy with %d workers to wait", sgh->hdr.num_pks);
-        } else {
-            bpf_printk("Got default WAIT_ALL completion policy");
-        }
+            bpf_printk("Gotnum workers to WAIT = %d", rs->num_workers);
+        // if (sgh->hdr.flags == SG_MSG_F_WAIT_ANY) {
+        //     bpf_printk("Got WAIT_ANY completion policy");
+        // } else if (sgh->hdr.flags == SG_MSG_F_WAIT_N) {
+        //     bpf_printk("Got WAIT_N completion policy with %d workers to wait", sgh->hdr.num_pks);
+        // } else {
+        //     bpf_printk("Got default WAIT_ALL completion policy");
+        // }
         #endif
         // start timer for request
         /*
@@ -388,17 +427,38 @@ int gather_prog(struct xdp_md* ctx) {
     // Drop packet if it is no longer necessary, to avoid racy reads when copying
     // the aggregated value into the final ctrl sk packet
     __u32 slot = GET_REQ_MAP_SLOT(resp_msg->hdr.req_id);
-    __s64* count = bpf_map_lookup_elem(&map_workers_resp_count, &slot);
-    if (!count)
+    
+    struct req_state* rs = bpf_map_lookup_elem(&map_req_state, &slot);
+    if (!rs)
         return XDP_ABORTED;
 
-    __s64 pk_count = __atomic_add_fetch(count, 0, __ATOMIC_SEQ_CST); // load
-    if (pk_count < 0) {
+    if (bpf_xdp_adjust_meta(ctx, -(int) sizeof(__u32)) < 0)
+        return XDP_ABORTED;
+
+    void* data_updated = (void*)(unsigned long) ctx->data;
+    __u32* pk_count_meta;
+    pk_count_meta = (void*)(unsigned long) ctx->data_meta;
+    if (pk_count_meta + 1 > data_updated)
+        return XDP_ABORTED;
+
+    // THE ISSUE IS THAT ONCE TWO PACKETS ARE PAST THIS CHECK,
+    // BOTH PACKETS WILL PERFORM AGGREGATION BUT ONLY ONE WILL BE SUCCESSFUL
+    // IN THE COMPLETION CHECK.
+    // HENCE THE COMPLETION CHECK MUST TAKE PLACE HERE (IE: BEFORE AGGREGATION)
+    bpf_spin_lock(&rs->count_lock);
+    if (rs->complete) {
+        bpf_spin_unlock(&rs->count_lock);
         #ifdef BPF_DEBUG_PRINT
-        bpf_printk("dropping packet, count is %d", pk_count);
+        bpf_printk("dropping packet, completion flag set");
         #endif
         return XDP_DROP;
     }
+    // Check for completion and increment count
+    __u32 pk_count = ++rs->count;
+    rs->complete = (rs->num_workers == pk_count);
+    bpf_spin_unlock(&rs->count_lock);
+
+    *pk_count_meta = (__u32) pk_count;
 
     // DISCUSS: for performance, maybe just treat it as a function instead
     // of a full program change to avoid overhead of re-parsing packet
@@ -423,17 +483,7 @@ int gather_prog(struct xdp_md* ctx) {
 #endif // CUSTOM_AGGREGATION_FUNC
 
 /*
-#ifdef VECTOR_RESPONSE
 
-    RESP_VECTOR_TYPE* agg_resp = bpf_map_lookup_elem(&map_aggregated_response, &ZERO_IDX);
-    if (!agg_resp)
-        return XDP_ABORTED;
-
-    for (__u32 i = 0; i < RESP_MAX_VECTOR_SIZE; ++i) {
-        agg_resp[i] += ((RESP_VECTOR_TYPE *)resp_msg->body)[i];
-    }
-
-#else
     // Get the int the worker responded with
     __u32 resp = bpf_ntohl(*((__u32 *) resp_msg->body));
     bpf_printk("Got packet with payload = %d for req ID = %d and seq num = %d", resp, resp_msg->hdr.req_id, resp_msg->hdr.seq_num);
@@ -443,85 +493,11 @@ int gather_prog(struct xdp_md* ctx) {
     if (!agg_resp)
         return XDP_ABORTED;
 
-    // CAN THIS BE REPLACED WITH *agg_resp = *agg_resp + resp; without the update call
-    // like in the vector version? it would make the aggregation API consistent
     const __u32 updated_resp = *agg_resp + resp;
     bpf_map_update_elem(&map_aggregated_response, &ZERO_IDX, &updated_resp, 0);
 
-#endif
 */
 }
-
-
-static __always_inline __u8 num_workers_satisfied(struct completion_policy_info* cpi, __s64* global_count, __u32* pk_count) {
-    // The response count is set to the max negative number so that any packets
-    // of the same request currently in-flight cannot reach the target count again
-    
-    if (cpi->policy == SG_MSG_F_WAIT_ANY) {
-        __atomic_exchange_n(global_count, -MAX_SOCKETS_ALLOWED, __ATOMIC_SEQ_CST);
-        return 1;
-    }
-
-    __s64 num_workers = cpi->waitN;
-    if (cpi->policy == SG_MSG_F_WAIT_ALL || cpi->policy == SG_MSG_F_WAIT_N) {
-        if (*pk_count == num_workers) {
-            // RACE CONDITION!!!!
-            // another packet may perform the aggregation before the count is 
-            // set to be negative.
-            // CAS would work for WaitAll but not WaitN
-            // easiest solution would be to just use a spinlock
-            // during benchmark, if this is a bottleneck, try to revert to atomics
-            // and find a better solution....
-            // return __atomic_compare_exchange_n(global_count, &num_workers, -MAX_SOCKETS_ALLOWED, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
-            __atomic_exchange_n(global_count, -MAX_SOCKETS_ALLOWED, __ATOMIC_SEQ_CST);
-            return 1;
-        }
-    }
-    return 0;
-}
-
-// static inline __u8 num_workers_satisfied(__u64* count, struct completion_policy_info* cpi) {
-//     // Note: if the function returns true, the value at count will atomically be 
-//     // reset to zero too, EXCEPT if the policy is SG_MSG_F_WAIT_ANY. Hence the lazy
-//     // cleanup in the scatter program
-
-//     // Getting to this implies at least one packet has arrived, so WAIT_ANY is always satisfied
-//     if (cpi->policy == SG_MSG_F_WAIT_ANY) {
-//         __atomic_exchange_n(count, 0, __ATOMIC_ACQ_REL);
-//         return 1;
-//     }
-//     // __sync_store_n(count, 0, __ATOMIC_RELEASE);
-//     // supported atomic ops in ebpf:
-//     // https://patchwork.ozlabs.org/project/gcc/patch/20211026122539.186747-1-guillermo.e.martinez@oracle.com/
-
-//     __u64 num_workers = cpi->waitN;
-//     if (cpi->policy == SG_MSG_F_WAIT_ALL) {
-//         return __atomic_compare_exchange_n(count, &num_workers, 0, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
-//     }
-//     else if (cpi->policy == SG_MSG_F_WAIT_N) {
-//         // check >= num_workers
-//         // Do we drop any packets after the nth? ask marios
-//         // might be able to do this using per-packet metadata and marking their count
-
-//         // This is not in a CAS loop, as it is sufficient to check for stale values
-//         // since the count is monotonically increasing throughout the request lifetime
-
-//         // maybe carry the pk count in the skb like before?
-//         // then each pk definitely has a non-changing count and we can drop
-//         // anything after
-//         // and can use xchg
-
-//         // THIS IS STILL ALLOWING MULTPLE CTRL SK NOTIFS!!!
-//         __u64* c;
-//         ATOMIC_LOAD_64(count, c);
-//         if (*c >= num_workers) {
-//             __atomic_exchange_n(count, 0, __ATOMIC_ACQ_REL);
-//             return 1;
-//         }
-//     }
-//     return 0;
-// }
-
 
 SEC("tc")
 int notify_gather_ctrl_prog(struct __sk_buff* skb) {
@@ -563,9 +539,6 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         || resp_msg->hdr.msg_type != GATHER_MSG)
         return TC_ACT_OK;
 
-
-    // Check for time-out
-    __u32 slot = GET_REQ_MAP_SLOT(resp_msg->hdr.req_id);
     
     /*
     struct req_timing* rqt = bpf_map_lookup_elem(&map_req_timing, &slot);
@@ -579,6 +552,8 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
     }
     */
 
+    __u32 slot = GET_REQ_MAP_SLOT(resp_msg->hdr.req_id);
+
     // Lightweight XDP -> TC communication design pattern: data follows the packet
     //    set field in XDP for skb, read in TC (data follows the packet)
     //  atomic add in XDP, read direct from packet
@@ -586,16 +561,16 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
     if (pk_count + 1 > (void*)(unsigned long) skb->data) {
         return TC_ACT_OK;
     }
-    struct completion_policy_info* cpi = bpf_map_lookup_elem(&map_req_completion_policy, &slot);
-    if (!cpi)
-        return TC_ACT_SHOT;
 
-    __s64* count = bpf_map_lookup_elem(&map_workers_resp_count, &slot);
-    if (!count)
+    struct req_state* rs = bpf_map_lookup_elem(&map_req_state, &slot);
+    if (!rs)
         return TC_ACT_SHOT;
 
     // Check completion satisfied
-    if (num_workers_satisfied(cpi, count, pk_count)) {
+    bpf_spin_lock(&rs->count_lock);
+    if (rs->complete && *pk_count == rs->num_workers) {
+        bpf_spin_unlock(&rs->count_lock);
+
         #ifdef BPF_DEBUG_PRINT
         bpf_printk("!!! REQUEST %d COMPLETED WITH count %d, NOTIFYING CTRL SOCKET !!!", resp_msg->hdr.req_id, *pk_count);
         #endif
@@ -614,6 +589,8 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         if (!agg_entry)
             return TC_ACT_SHOT;
 
+        bpf_printk("!!! Final agg value in kernel = %d !!!", agg_entry->data[300]);
+
         // Note: spinlock not needed for reading the aggregated data because 
         // at this point, any redundant packet trying to update the aggregated 
         // response is dropped prior to the aggregation logic
@@ -628,8 +605,9 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         // NOTE: alternatively, we could consider a lazy cleanup: cleanup the resources
         // for a request when a new request is launched and is meant to take the old request's place
         reset_aggregated_vector(agg_entry->data);
+    } else {
+        bpf_spin_unlock(&rs->count_lock);
     }
-
     return TC_ACT_OK;
 }
 

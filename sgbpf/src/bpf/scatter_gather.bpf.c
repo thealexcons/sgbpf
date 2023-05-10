@@ -9,15 +9,14 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
 
-#include "common.h"
-#include "helpers.bpf.h"
-#include "maps.bpf.h"
+#include "Common.h"
+#include "bpf_h/helpers.bpf.h"
+#include "bpf_h/maps.bpf.h"
 
-// #define CUSTOM_AGGREGATION 1
 
-#ifdef CUSTOM_AGGREGATION
-#include "custom_aggregation.bpf.h"
-#endif // CUSTOM_AGGREGATION
+#ifdef CUSTOM_AGGREGATION_FUNC
+#include "bpf_h/custom_aggregation_function.bpf.h"
+#endif // CUSTOM_AGGREGATION_FUNC
 
 static const __u32 ZERO_IDX = 0;
 
@@ -30,15 +29,10 @@ static const __u32 ZERO_IDX = 0;
 #define SG_MSG_BODY_OFF (ETH_HLEN + sizeof(struct iphdr) + sizeof(struct udphdr) + offsetof(sg_msg_t, body))
 
 static void __always_inline clone_and_send_packet(struct __sk_buff* skb, 
-                                                  struct iphdr* iph, 
-                                                  struct udphdr* udph,
                                                   uint32_t worker_ip,   // Network byte order
                                                   uint16_t worker_port, // Network byte order
                                                   uint16_t app_port)    // Network byte order
 {
-    (void) iph;
-    (void) udph;
-
     #ifdef BPF_DEBUG_PRINT
     char str[16] = "";
     __u32 ip_addr_h = bpf_ntohl(worker_ip);
@@ -69,27 +63,64 @@ static void __always_inline clone_and_send_packet(struct __sk_buff* skb,
 
 struct send_worker_ctx {
     struct __sk_buff* skb;
-    struct iphdr* ip_header;
-    struct udphdr* udp_header;
 };
 
-static __u64 send_worker(void* map, __u32* idx, worker_info_t* worker, struct send_worker_ctx* data) {    
+static __u64 send_worker(void* map, __u32* idx, worker_info_t* worker, struct send_worker_ctx* ctx) {    
     // Non-populated map entries are zero, so stop iterating if we encounter 0
     // return 1 means the iteration should stop
     if (!worker || (worker->worker_ip == 0 || worker->worker_port == 0))
         return 1;
 
-    clone_and_send_packet(data->skb, data->ip_header, data->udp_header, worker->worker_ip, worker->worker_port, worker->app_port);
+    clone_and_send_packet(ctx->skb, worker->worker_ip, worker->worker_port, worker->app_port);
     return 0;   // Continue to next worker destination (return 0)
 }
 
-// static const char* SCATTER_MSG = "SCATTER";
-// static const __u32 SCATTER_MSG_LEN = 7;
+static __always_inline void reset_aggregated_vector(RESP_VECTOR_TYPE* agg_vector) {
+    // ebpf sets a maximum size for memset, so we need to "hack" around it
+    #define MAX_CONTIGUOUS_MEMSET_SIZE 256
+
+    #pragma clang loop unroll(full)
+    for (__u32 i = 0; i < RESP_MAX_VECTOR_SIZE; ++i) {
+        if (__glibc_unlikely(MOD_POW2(i, MAX_CONTIGUOUS_MEMSET_SIZE) == 0)) {
+            asm volatile("" ::: "memory"); // dummy instruction needed to break the memset, need something cheap
+        }
+        agg_vector[i] = 0;
+    }
+}
+
+static inline int handle_clean_req_msg(char* payload, __u32 payload_size, void* data_end) {
+
+    sg_clean_req_msg_t* clean_msg = (sg_clean_req_msg_t*) payload;
+    if (clean_msg->magic != SG_CLEAN_REQ_MSG_MAGIC)
+        return TC_ACT_OK;
+
+    __u32 slot = GET_REQ_MAP_SLOT(clean_msg->req_id);
+
+    bpf_printk("Got cleanup msg for req id %d (with slot %d)", clean_msg->req_id, slot);
+    
+    // reset the stale count
+    __s64* count = bpf_map_lookup_elem(&map_workers_resp_count, &slot);
+    if (!count)
+        return XDP_ABORTED;
+    __atomic_exchange_n(count, 0, __ATOMIC_SEQ_CST);
+
+    // reset the stale aggregated data
+    struct aggregation_entry* agg_entry = bpf_map_lookup_elem(&map_aggregated_response, &slot);
+    if (!agg_entry)
+        return TC_ACT_SHOT;
+    bpf_spin_lock(&agg_entry->lock);
+    reset_aggregated_vector(agg_entry->data);
+    bpf_spin_unlock(&agg_entry->lock);
+
+    return TC_ACT_SHOT;
+}
 
 
 SEC("tc")
 int scatter_prog(struct __sk_buff* skb) {
-	void* data = (void *)(long)skb->data;
+    // START_TIMER("scatter_prog");
+	
+    void* data = (void *)(long)skb->data;
 	void* data_end = (void *)(long)skb->data_end;
 	struct ethhdr* ethh;
 	struct iphdr* iph;
@@ -120,7 +151,8 @@ int scatter_prog(struct __sk_buff* skb) {
     // sudo sysctl -w kernel.bpf_stats_enabled=1   (remember to turn off)
     // Then, do:
     // sudo cat /proc/<LOADER_PID>/fdinfo/<BPF_PROG_FD>
-    // The loader pid is typically 2nd after running: ps aux | grep "loader"
+    // The loader pid is typically 2nd (w/o sudo) after running: ps aux | grep "loader"
+    // however this seems to be mismatched with manually timing it.
 
     // Intercept any outgoing scatter messages from the application
     // TODO Maybe there's a better way to intercept traffic from a particular socket
@@ -135,15 +167,20 @@ int scatter_prog(struct __sk_buff* skb) {
     if (udph->dest == udph->source && udph->source == *local_application_port) {
         
         __u32 payload_size = bpf_ntohs(udph->len) - sizeof(struct udphdr);
+        char* payload = (char*) udph + sizeof(struct udphdr);
+
         // Note: this equality is needed so that the comparison size is known
         // at compile-time for the loop unrolling.
-        if (payload_size != sizeof(sg_msg_t))
+        if (payload_size != sizeof(sg_msg_t)) {
+            if (payload_size == sizeof(sg_clean_req_msg_t) && !((void*) payload + payload_size > data_end)) {
+                return handle_clean_req_msg(payload, payload_size, data_end);
+            }
             return TC_ACT_OK;
+        }
 
-        char* payload = (char*) udph + sizeof(struct udphdr);
-        if ((void*) payload + payload_size > data_end) {
+        if (((void*) payload + payload_size > data_end)) {
             // data_end - data = MTU size + ETH_HDR (14 bytes)
-            bpf_printk("Invalid packet size: payload might be larger than MTU");
+            bpf_printk("Invalid packet size: payload might be larger than MTU?");
             return TC_ACT_OK;
         }
 
@@ -162,19 +199,12 @@ int scatter_prog(struct __sk_buff* skb) {
         __s64* count = bpf_map_lookup_elem(&map_workers_resp_count, &slot);
         if (!count)
             return XDP_ABORTED;
-        __atomic_exchange_n(count, 0, __ATOMIC_ACQ_REL);
+        __atomic_exchange_n(count, 0, __ATOMIC_SEQ_CST);
 
         struct completion_policy_info* cpi = bpf_map_lookup_elem(&map_req_completion_policy, &slot);
         if (!cpi)
             return XDP_ABORTED;
 
-        // Lazy cleanup of map entry if previous entry used the SG_MSG_F_WAIT_ANY policy
-        // if (__glibc_unlikely(cpi->policy == SG_MSG_F_WAIT_ANY)) {
-        //     __u64* count = bpf_map_lookup_elem(&map_workers_resp_count, &slot);
-        //     if (!count)
-        //         return XDP_ABORTED;
-        //     *count = 0; // UB if num active requests > MAX_ACTIVE_REQUESTS
-        // }
         cpi->policy = sgh->hdr.flags;
         cpi->waitN = (sgh->hdr.flags == SG_MSG_F_WAIT_N || sgh->hdr.flags == SG_MSG_F_WAIT_ALL) ? sgh->hdr.num_pks : 0;
 
@@ -202,10 +232,10 @@ int scatter_prog(struct __sk_buff* skb) {
         // Clone the outgoing packet to all the registered workers
         struct send_worker_ctx data = {
             .skb = skb,
-            .ip_header = iph,
-            .udp_header = udph,
         };
         bpf_for_each_map_elem(&map_workers, send_worker, &data, 0);
+
+        // END_TIMER();
 
 #ifdef BPF_DEBUG_PRINT
         bpf_printk("Finished SCATTER request");
@@ -262,18 +292,6 @@ int scatter_prog(struct __sk_buff* skb) {
 //     return (bpf_ktime_get_ns() - rqt->start_ns > rqt->timeout_ns);
 // } 
 
-inline static void reset_aggregated_vector(RESP_VECTOR_TYPE* agg_vector) {
-    // ebpf sets a maximum size for memset, so we need to "hack" around it
-    #define MAX_CONTIGUOUS_MEMSET_SIZE 256
-
-    #pragma clang loop unroll(full)
-    for (__u32 i = 0; i < RESP_MAX_VECTOR_SIZE; ++i) {
-        if (__glibc_unlikely(MOD_POW2(i, MAX_CONTIGUOUS_MEMSET_SIZE) == 0)) {
-            barrier(); // dummy instruction needed to break the memset, need something cheap
-        }
-        agg_vector[i] = 0;
-    }
-}
 
 SEC("xdp")
 int gather_prog(struct xdp_md* ctx) {
@@ -374,25 +392,37 @@ int gather_prog(struct xdp_md* ctx) {
     if (!count)
         return XDP_ABORTED;
 
-    __s64 pk_count = __atomic_add_fetch(count, 0, __ATOMIC_ACQ_REL); // load
+    __s64 pk_count = __atomic_add_fetch(count, 0, __ATOMIC_SEQ_CST); // load
     if (pk_count < 0) {
         #ifdef BPF_DEBUG_PRINT
         bpf_printk("dropping packet, count is %d", pk_count);
         #endif
         return XDP_DROP;
     }
-  
-    bpf_tail_call(ctx, &map_aggregation_progs, CUSTOM_AGGREGATION_PROG);
 
     // DISCUSS: for performance, maybe just treat it as a function instead
     // of a full program change to avoid overhead of re-parsing packet
     // as a raw function call, this works
-#ifdef CUSTOM_AGGREGATION
-    aggregate(resp_msg, agg_resp);
-    AGGREGATION_PROG_OUTRO(resp_msg);
-#endif // CUSTOM_AGGREGATION
 
+#ifndef CUSTOM_AGGREGATION_FUNC
+    // Standard method: use BPF program defined in separate object file
+    bpf_tail_call(ctx, &map_aggregation_progs, CUSTOM_AGGREGATION_PROG);
+    return XDP_PASS;
+#else
+    // Alternative method: use regular function call defined in supplied header file
+    struct aggregation_entry* agg_entry = bpf_map_lookup_elem(&map_aggregated_response, &slot);
+    if (!agg_entry)
+        return XDP_ABORTED;
 
+    bpf_spin_lock(&agg_entry->lock);
+    enum xdp_action act = aggregate(resp_msg, agg_entry->data);
+    bpf_spin_unlock(&agg_entry->lock);
+    if (act != XDP_PASS)
+        return act;
+    return post_aggregation_process(ctx, resp_msg);
+#endif // CUSTOM_AGGREGATION_FUNC
+
+/*
 #ifdef VECTOR_RESPONSE
 
     RESP_VECTOR_TYPE* agg_resp = bpf_map_lookup_elem(&map_aggregated_response, &ZERO_IDX);
@@ -419,25 +449,31 @@ int gather_prog(struct xdp_md* ctx) {
     bpf_map_update_elem(&map_aggregated_response, &ZERO_IDX, &updated_resp, 0);
 
 #endif
-
-    // this macro is outdated and only suited for the custom prog
-    // AGGREGATION_PROG_OUTRO(ctx, resp_msg); 
+*/
 }
 
 
-static inline __u8 num_workers_satisfied(struct completion_policy_info* cpi, __s64* global_count, __u32* pk_count) {
+static __always_inline __u8 num_workers_satisfied(struct completion_policy_info* cpi, __s64* global_count, __u32* pk_count) {
     // The response count is set to the max negative number so that any packets
     // of the same request currently in-flight cannot reach the target count again
     
     if (cpi->policy == SG_MSG_F_WAIT_ANY) {
-        __atomic_exchange_n(global_count, -MAX_SOCKETS_ALLOWED, __ATOMIC_ACQ_REL);
+        __atomic_exchange_n(global_count, -MAX_SOCKETS_ALLOWED, __ATOMIC_SEQ_CST);
         return 1;
     }
 
-    __u32 num_workers = cpi->waitN;
+    __s64 num_workers = cpi->waitN;
     if (cpi->policy == SG_MSG_F_WAIT_ALL || cpi->policy == SG_MSG_F_WAIT_N) {
         if (*pk_count == num_workers) {
-            __atomic_exchange_n(global_count, -MAX_SOCKETS_ALLOWED, __ATOMIC_ACQ_REL);
+            // RACE CONDITION!!!!
+            // another packet may perform the aggregation before the count is 
+            // set to be negative.
+            // CAS would work for WaitAll but not WaitN
+            // easiest solution would be to just use a spinlock
+            // during benchmark, if this is a bottleneck, try to revert to atomics
+            // and find a better solution....
+            // return __atomic_compare_exchange_n(global_count, &num_workers, -MAX_SOCKETS_ALLOWED, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+            __atomic_exchange_n(global_count, -MAX_SOCKETS_ALLOWED, __ATOMIC_SEQ_CST);
             return 1;
         }
     }
@@ -527,6 +563,7 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         || resp_msg->hdr.msg_type != GATHER_MSG)
         return TC_ACT_OK;
 
+
     // Check for time-out
     __u32 slot = GET_REQ_MAP_SLOT(resp_msg->hdr.req_id);
     
@@ -552,7 +589,6 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
     struct completion_policy_info* cpi = bpf_map_lookup_elem(&map_req_completion_policy, &slot);
     if (!cpi)
         return TC_ACT_SHOT;
-
 
     __s64* count = bpf_map_lookup_elem(&map_workers_resp_count, &slot);
     if (!count)

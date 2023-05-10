@@ -1,4 +1,3 @@
-// #include <bpf/bpf.h>
 #include <iostream>
 #include <vector>
 #include <thread>
@@ -7,11 +6,11 @@
 #include <sstream>
 #include <fstream>
 
-#include "ebpfpp/Program.h"
-#include "ebpfpp/Map.h"
-#include "ebpfpp/Object.h"
-#include "ebpfpp/Util.h"
-#include "ebpfpp/Hook.h"
+#include "sgbpf/ebpf/Program.h"
+#include "sgbpf/ebpf/Map.h"
+#include "sgbpf/ebpf/Object.h"
+#include "sgbpf/ebpf/Util.h"
+#include "sgbpf/ebpf/Hook.h"
 
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
@@ -103,40 +102,9 @@ std::pair<int, uint16_t> open_worker_socket() {
     return { workerSk, workerAddr.sin_port };
 }
 
-
-std::pair<bpf_tc_hook, bpf_tc_opts> attach_tc_program(int ifindex, int progFd, bpf_tc_attach_point attach_point) {
-    // TC API: https://github.com/libbpf/libbpf/commit/d71ff87a2dd7b92787719aab233767e9c74fbd48
-    // SEE EXAMPLE AT THE BOTTOM
-    bpf_tc_hook tcHook;
-    memset(&tcHook, 0, sizeof(bpf_tc_hook));    // also needed
-    tcHook.attach_point = attach_point;
-    tcHook.ifindex = ifindex;
-    tcHook.sz = sizeof(bpf_tc_hook);    // this is needed for some reason, otherwise it fails
-
-    auto err = bpf_tc_hook_create(&tcHook);
-	if (err && err != -EEXIST) {
-		fprintf(stderr, "Failed to create TC hook: %d\n", err);
-		exit(EXIT_FAILURE);
-	}
-
-    bpf_tc_opts tcOpts;
-    memset(&tcOpts, 0, sizeof(bpf_tc_opts));
-    tcOpts.prog_fd = progFd;
-    tcOpts.sz = sizeof(bpf_tc_opts);    // this is needed for some reason, otherwise it fails
-
-    if (bpf_tc_attach(&tcHook, &tcOpts) < 0) {
-        std::cerr << "Could not attach TC hook for egress\n";
-        exit(EXIT_FAILURE);    
-    }
-
-    return { tcHook, tcOpts };
-}
-
 enum {
-    ACCEPT,
     READ,
     WRITE,
-    PROV_BUF,
 };
 
 typedef struct conn_info {
@@ -146,7 +114,7 @@ typedef struct conn_info {
 } conn_info;
 
 void add_socket_read(struct io_uring *ring, int fd, unsigned gid, size_t message_size, unsigned flags) {
-    struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
+    io_uring_sqe *sqe = io_uring_get_sqe(ring);
     io_uring_prep_recv(sqe, fd, NULL, message_size, MSG_WAITALL); // wait for all fragments to arrive
     io_uring_sqe_set_flags(sqe, flags);
     sqe->buf_group = gid;
@@ -158,11 +126,49 @@ void add_socket_read(struct io_uring *ring, int fd, unsigned gid, size_t message
     memcpy(&sqe->user_data, &conn_i, sizeof(conn_i));
 }
 
+
+void add_scatter_send(struct io_uring* ring, int skfd, sockaddr_in* servAddr) {
+    // Send the message to itself
+    const auto SCATTER_STR = "SCATTER";
+    sg_msg_t scatter_msg;
+    memset(&scatter_msg, 0, sizeof(sg_msg_t));
+    scatter_msg.hdr.req_id = 1;
+    scatter_msg.hdr.msg_type = SCATTER_MSG;
+    scatter_msg.hdr.body_len = strnlen(SCATTER_STR, BODY_LEN);
+    strncpy(scatter_msg.body, SCATTER_STR, scatter_msg.hdr.body_len);
+
+    // this auxilary struct is needed for the sendmsg io_uring operation
+    struct iovec iov = {
+		.iov_base = &scatter_msg,
+		.iov_len = sizeof(sg_msg_t),
+	};
+
+	struct msghdr msgh;
+    memset(&msgh, 0, sizeof(msgh));
+	msgh.msg_name = servAddr;
+	msgh.msg_namelen = sizeof(struct sockaddr_in);
+	msgh.msg_iov = &iov;
+	msgh.msg_iovlen = 1;
+
+    io_uring_sqe *sqe = io_uring_get_sqe(ring);
+    io_uring_prep_sendmsg(sqe, skfd, &msgh, 0); // TODO look into sendmsg_zc (zero-copy)
+    io_uring_sqe_set_flags(sqe, 0);
+
+    conn_info conn_i = {
+        .fd = skfd,
+        .type = WRITE,
+    };
+    memcpy(&sqe->user_data, &conn_i, sizeof(conn_i));
+}
+
+
 int main(int argc, char** argv) {
     if (argc < 2) {
         std::cerr << "ERROR - Usage is: " << argv[0] << " <BPF_FILE> <INTERFACE>" << "\n";
         return 1;
     }
+
+    const uint32_t zero = 0;
 
     // Read the worker destinations
     auto workerDestinations = readWorkerDestinations("workers.cfg");
@@ -174,54 +180,46 @@ int main(int argc, char** argv) {
         return 1;
     }
     
+    // Open and attach the eBPF programs
     ebpf::Object obj{argv[1]};
+    ebpf::Object aggregationProgObj{"aggregation.bpf.o"};
 
     auto scatterTCProg = obj.findProgramByName("scatter_prog").value();
-    std::cout << "Loaded TC prog with fd " << scatterTCProg.fd() << " and name " << scatterTCProg.name() << '\n';
-
-    std::cout << "Prog type: " << bpf_program__type(scatterTCProg.get()) << "\n";
-
-    auto maps = obj.maps();
-    for (const auto& m : maps) {
-        std::cout << "Map " << m.name() << ", ";
-    }
-    std::cout << '\n';
-
-
-    // bpf_tc_hook scatterProgTCHook;
-    // bpf_tc_opts scatterProgTCOpts;
-    // const auto tcConfig = attach_tc_program(ifindex, scatterTCProg.fd(), BPF_TC_EGRESS);
-    // std::tie(tcConfig, scatterProgTCHook, scatterProgTCOpts);
     auto scatterProgHookHandle = ebpf::TCHook::attach(ifindex, scatterTCProg, BPF_TC_EGRESS);
     
-
+    // NOT needed if we ignore the ctrl socket notification
     auto gatherNotifyTCProg = obj.findProgramByName("notify_gather_ctrl_prog").value();
-    // bpf_tc_hook gatherNotifyProgTCHook;
-    // bpf_tc_opts gatherNotifyProgTCOpts;
-    // const auto tcConfig2 = attach_tc_program(ifindex, gatherNotifyTCProg.fd(), BPF_TC_INGRESS);
-    // std::tie(tcConfig2, gatherNotifyProgTCHook, gatherNotifyProgTCOpts);
     auto gatherNotifyProgHookHandle = ebpf::TCHook::attach(ifindex, gatherNotifyTCProg, BPF_TC_INGRESS);
 
-
-    // Attach the gather XDP program
     auto gatherXdpProg = obj.findProgramByName("gather_prog").value();
-    // bpf_xdp_attach_opts opts; // I think we can just pass in NULL
-    // bpf_xdp_attach(ifindex, gatherXdpProg.fd(), 0, 0);
     auto gatherProgHookHandle = ebpf::XDPHook::attach(ifindex, gatherXdpProg);
+
+    auto aggregationProgFd = aggregationProgObj.findProgramByName("aggregation_prog").value().fd();
+
+    // Load the vector aggregation program and populate the program map for tail calls
+    // auto vecAggProgsMap = obj.findMapByName("map_vector_aggregation_progs").value();
+    // auto vecAggProgFd = obj.findProgramByName("vector_aggregation_prog").value().fd();
+    // auto progIdx = VECTOR_AGGREGATION_PROG_IDX;
+    // vecAggProgsMap.update(&progIdx, &aggregationProgFd);
+    
+    // vecAggProgFd = obj.findProgramByName("post_vector_aggregation_prog").value().fd();
+    // progIdx = 1;
+    // vecAggProgsMap.update(&progIdx, &vecAggProgFd);
+
+    auto aggregatedValueMap = obj.findMapByName("map_aggregated_response").value();
+    RESP_VECTOR_TYPE aggregatedChunk1[RESP_MAX_VECTOR_SIZE] = {0};
+    aggregatedValueMap.update(&zero, &aggregatedChunk1, 0);
     
     ////////////////////////////////////////////////////////////////////////////////////////
 
 
     // Register the application's outgoing port
     auto applicationPortMap = obj.findMapByName("map_application_port").value();
-    const uint32_t zero = 0;
     const auto portNetBytes = htons(PORT);
     applicationPortMap.update(&zero, &portNetBytes);
 
 
     // Register the destination worker IPs and ports
-    // auto workerIpMap = obj.findMapByName("map_worker_ips").value();
-    // auto workerPortMap = obj.findMapByName("map_worker_ports").value();
     auto workersMap = obj.findMapByName("map_workers").value();
     auto workersHashMap = obj.findMapByName("map_workers_resp_status").value();
 
@@ -309,71 +307,58 @@ int main(int argc, char** argv) {
     io_uring_cqe_seen(&ring, cqe);
 
 
-    // Send the message to itself
-    const auto SCATTER_STR = "SCATTER";
+    // add the scatter send operation to the SQ for the outgoing socket
+    add_scatter_send(&ring, skfd, &servAddr);
+    // io_uring_submit(&ring);
 
-    // TODO add the send to the io_uring queue too
+    std::cout << io_uring_sq_ready(&ring) << std::endl;
+    // std::cout << "Sent scatter message" << std::endl;
 
-    sg_msg_t hdr;
-    memset(&hdr, 0, sizeof(sg_msg_t));
-    hdr.req_id = 1;
-    hdr.msg_type = SCATTER_MSG;
-    hdr.body_len = strnlen(SCATTER_STR, BODY_LEN);
-    strncpy(hdr.body, SCATTER_STR, hdr.body_len);
+    // Add all the socket read operations (workers and contrl socket)
+    for (auto wfd : workerFds) {
+        add_socket_read(&ring, wfd, GROUP_ID, MAX_MESSAGE_LEN, IOSQE_BUFFER_SELECT);
+    }
+    std::cout << io_uring_sq_ready(&ring) << std::endl;
 
-    // if (sendto(skfd, &hdr, sizeof(sg_msg_t), 0, (const struct sockaddr *)&servAddr, sizeof(sockaddr_in)) == -1) {
-    //     perror("sendto");
-    //     exit(EXIT_FAILURE);
-    // }
-
-    // this auxilary struct is needed for the sendmsg io_uring operation
-    struct iovec iov = {
-		.iov_base = &hdr,
-		.iov_len = sizeof(sg_msg_t),
-	};
-
-	struct msghdr msg;
-    memset(&msg, 0, sizeof(msg));
-	msg.msg_name = &servAddr;
-	msg.msg_namelen = sizeof(struct sockaddr_in);
-	msg.msg_iov = &iov;
-	msg.msg_iovlen = 1;
-
-    sqe = io_uring_get_sqe(&ring);
-    io_uring_prep_sendmsg(sqe, skfd, &msg, 0);
-    io_uring_sqe_set_flags(sqe, 0);
-
-    conn_info conn_i = {
-        .fd = skfd,
-        .type = WRITE,
-    };
-    memcpy(&sqe->user_data, &conn_i, sizeof(conn_i));
-    io_uring_submit(&ring);
-    
-    std::cout << "Sent scatter message" << std::endl;
-
-    // Add a socket read operation to the SQE for the ctrl socket 
     add_socket_read(&ring, ctrlSkFd, GROUP_ID, MAX_MESSAGE_LEN, IOSQE_BUFFER_SELECT);
 
-    RESP_AGGREGATION_TYPE userspace_aggregated_value;
+    std::cout << io_uring_sq_ready(&ring) << std::endl;
+
+    // Submit the IO requests for all the worker sockets, the ctrl socket and the write socket
+    io_uring_submit_and_wait(&ring, workerFds.size() + 2);
+
+    // Submit and wait for completion (alternatively, omit _and_wait() for busy wait polling)
+    // Also, see kernel thread polling mode to avoid any syscalls at all (but has high CPU usage)
+    // SQ kthread polling: https://unixism.net/loti/tutorial/sq_poll.html
+    // params.flags |= IORING_SETUP_SQPOLL;
+    // params.sq_thread_idle = 2000;    // in ms, time to wake up sq thread if no activity
+    // but kernel polling mode has it's own cost. If the system call overhead is no where close 
+    // to being a bottle neck, i.e. you don't do system calls "that" much, e.g. because your 
+    // endpoints take longer to complete then using kernel polling mode can degrade the overall system performance. And potential increase power consumption and as such heat generation.
+
+
+    // RESP_AGGREGATION_TYPE userspace_aggregated_value = 0;
     std::vector<int> processedWorkerFds;
 
+    std::unordered_map<int, std::vector<std::array<RESP_VECTOR_TYPE, RESP_MAX_VECTOR_SIZE>>> multiPacketMessages;
+    std::unordered_map<int, uint32_t> multiPacketMessagesCount;
+
+    unsigned expectedPacketsPerMsg = 1;
+    for (auto wfd : workerFds)
+        multiPacketMessages[wfd].resize(expectedPacketsPerMsg);    
+
     while (1) {
-        std::cout << "entering event loop\n";
-        // Submit and wait for completion (alternatively, omit _and_wait() for busy wait polling)
-        // Also, see kernel thread polling mode to avoid any syscalls at all (but has high CPU usage)
-        io_uring_submit_and_wait(&ring, 1);
+        std::cout << "entering event loop\n";       
         io_uring_cqe *cqe;
-        unsigned head;
         unsigned count = 0;
+        unsigned head;
 
         io_uring_for_each_cqe(&ring, head, cqe) {
             ++count;
 
             conn_info conn_i;
-            memcpy(&conn_i, &cqe->user_data, sizeof(conn_i));
+            memcpy(&conn_i, &cqe->user_data, sizeof(conn_i)); // TODO cast cqe->user_data to conn_i instead?
 
-            int type = conn_i.type;
             if (cqe->res == -ENOBUFS) {
                 fprintf(stdout, "bufs in automatic buffer selection empty, this should not happen...\n");
                 fflush(stdout);
@@ -390,10 +375,45 @@ int main(int argc, char** argv) {
                     close(conn_i.fd);
                 } else {
                     
-                    // this is a notification on the ctrl socket
+                    // processedWorkerFds.push_back(conn_i.fd);
+                    auto resp = (sg_msg_t*) bufs[buff_id];
+
+                    // Scalar aggregation:
+                    // auto data = ntohl(*(uint32_t*) resp->body);
+                    // userspace_aggregated_value += data;
+                    // std::cout << "got response from worker socket: " << data << " with seq num = " << resp->hdr.seq_num << std::endl;
+
+                    // Vectorised aggregation: check for control socket
+                    auto data = (uint32_t*) resp->body;
+
+                    // ctrl socket notification (for single-packet vectorised aggregation)
                     if (conn_i.fd == ctrlSkFd) {
-                        auto r = (sg_msg_t*) bufs[buff_id];
-                        std::cout << "got response: " << ntohl(*(uint32_t*)r->body) << '\n';
+                        std::cout << "control socket packet received\n";
+                        for (auto i = 0u; i < RESP_MAX_VECTOR_SIZE; i++) {
+                            std::cout << "vec[" << i << "] = " << data[i] << std::endl;
+                        }
+                    }
+                    else    // read operation from a worker socket
+                    {
+                        // check for multi-packet message
+                        if (expectedPacketsPerMsg != resp->hdr.num_pks && resp->hdr.num_pks > 1) {
+                            expectedPacketsPerMsg = resp->hdr.num_pks;
+
+                            // reserve slots for each packet body
+                            for (auto wfd : workerFds)
+                                multiPacketMessages[wfd].resize(resp->hdr.num_pks);                        
+                        }
+
+                        if (resp->hdr.seq_num <= resp->hdr.num_pks) {
+                            // multiPacketMessages[conn_i.fd][std::max(static_cast<int>(resp->hdr.seq_num) - 1, 0)] = std::move(data);
+                            multiPacketMessagesCount[conn_i.fd]++;
+                        }
+                    }
+                
+                    // this is a notification on the ctrl socket
+                    // if (conn_i.fd == ctrlSkFd) {
+                    //     auto r = (sg_msg_t*) bufs[buff_id];
+                    //     std::cout << "got response from ctrl socket: " << ntohl(*(uint32_t*)r->body) << std::endl;
 
                         // add requests to read from worker sockets
                         // DISCUSSION: is this even needed now? io_uring will automatically
@@ -408,38 +428,67 @@ int main(int argc, char** argv) {
                         // of workers + 1???
 
                         // TODO Investigate io_uring thread mapping?
-                        // can we have multiple io_uring instances
-                        // is the instance shared across multiple user threads?
+                        // can we have multiple io_uring instances. YES
+                        // Axboe (creator of io_uring) recommends one io_ring per thread:
+                        // https://github.com/axboe/liburing/issues/571#issuecomment-1106480309
 
-                        for (auto wfd : workerFds) {
-                            add_socket_read(&ring, wfd, GROUP_ID, MAX_MESSAGE_LEN, IOSQE_BUFFER_SELECT);
-                        }
+                        // Article on io_uring internals and kernel threads:
+                        // https://blog.cloudflare.com/missing-manuals-io_uring-worker-pool/
 
-                        userspace_aggregated_value = 0; // reset value
-                        processedWorkerFds = {};
 
-                    } else {
-                        // get individual response from worker socket
-                        // need to keep track whether we have received all responses
-                        // because we cannot loop over them explicity
+                        // for (auto wfd : workerFds) {
+                        //     add_socket_read(&ring, wfd, GROUP_ID, MAX_MESSAGE_LEN, IOSQE_BUFFER_SELECT);
+                        // }
 
-                        processedWorkerFds.push_back(conn_i.fd);
-                        auto r = (sg_msg_t*) bufs[buff_id];
-                        auto data = ntohl(*(uint32_t*) r->body);
-                        userspace_aggregated_value += data;
-                    }
+                        // userspace_aggregated_value = 0; // reset value
+                        // processedWorkerFds = {};
+
+                    // } else {
+                    //     // get individual response from worker socket
+                    //     // need to keep track whether we have received all responses
+                    //     // because we cannot loop over them explicity
+
+                    //     processedWorkerFds.push_back(conn_i.fd);
+                    //     auto r = (sg_msg_t*) bufs[buff_id];
+                    //     auto data = ntohl(*(uint32_t*) r->body);
+                    //     userspace_aggregated_value += data;
+                    //     std::cout << "got response from worker socket: " << ntohl(*(uint32_t*)r->body) << std::endl;
+
+                    // }
                 }
             }
         }
 
-        io_uring_cq_advance(&ring, count);
+        int remaining = 0;
 
-        // Have we read all the individual responses from the worker sockets?
-        std::sort(processedWorkerFds.begin(), processedWorkerFds.end());
-        if (processedWorkerFds == workerFds) {
-            std::cout << "Aggregated value in user-space = " << userspace_aggregated_value << std::endl;
+        // Check for completion
+        for (const auto& [wfd, pks] : multiPacketMessagesCount) {
+            auto pksRemainingForThisWorker = abs(expectedPacketsPerMsg - pks);
+            if (pksRemainingForThisWorker > 0) {
+                remaining += pksRemainingForThisWorker;
+
+                // Add the remaining socket read operations to the SQ
+                for (auto i = 0; i < pksRemainingForThisWorker; i++)
+                    add_socket_read(&ring, wfd, GROUP_ID, MAX_MESSAGE_LEN, IOSQE_BUFFER_SELECT);
+            }
+        }
+
+        std::cout << "Remaining packets: " << remaining << std::endl;
+
+        if (!remaining) {
+            // std::cout << "Aggregated (multi-packet) value in user-space = " << userspace_aggregated_value << std::endl;
             break;
         }
+
+        io_uring_cq_advance(&ring, count);
+        io_uring_submit_and_wait(&ring, remaining);
+
+        // Regarding this extra syscall: because we do not know the number of packets per message
+        // we must dynamically set this at runtime as soon as we receive the first packet
+        // hence, this requires a second syscall with the full number of reads
+
+        // alternative would be to allow the user to configure this number of expected packets per
+        // response message at compile-time, requiring only a single syscall at the start
     }
 
 
@@ -478,56 +527,19 @@ int main(int argc, char** argv) {
     // }
 
  
-
-    // if (recvfrom(skfd, buf, 256, 0, (struct sockaddr *)&client, &slen) == -1) {
-    //     perror("recvfrom");
-    //     exit(EXIT_FAILURE);
-    // }
-    
-    // printf("Received packet from %s:%d\nData: %s\n\n", inet_ntoa(client.sin_addr), ntohs(client.sin_port), buf);
-    
-    // sockaddr_in clientAddr;
-    // memset(&clientAddr, 0, sizeof(clientAddr));
-    // socklen_t len = sizeof(clientAddr);
-    // char buffer[1024];
-    // while (1) {
-
-    //     /*
-    //         Send UDP packets to test:
-    //         $ echo "hi" | nc -u localhost <PORT>
-    //     */
-
-    //     int n = recvfrom(skfd, buffer, sizeof(buffer), MSG_WAITALL, 
-    //                 (struct sockaddr *) &clientAddr, &len);
-        
-    //     buffer[n] = '\0';
-    //     std::string data{buffer, n-1};
-    //     std::cout << "Got: '" << data << "' from client\n";
-
-    //     std::string resp = "ack";
-    //     sendto(skfd, resp.c_str(), strlen(resp.c_str()), MSG_CONFIRM,
-    //         (const struct sockaddr*) &clientAddr, len);
-    // }
-
     // Get the aggregated value
-    auto aggregatedValueMap = obj.findMapByName("map_aggregated_response").value();
-    RESP_AGGREGATION_TYPE value;
-    aggregatedValueMap.find(&zero, &value);
-
-    std::cout << "Final aggregated value (from BPF map) = " << value << std::endl;
+    // aggregatedValueMap.find(&zero, &aggregatedChunk1);
+    // std::cout << "Final aggregated vector (from BPF map) = " << std::endl;
+    // for (auto i = 0u; i < RESP_MAX_VECTOR_SIZE; i++) {
+    //     std::cout << "vec[" << i << "] = " << aggregatedChunk1[i] << std::endl;
+    // }
 
     close(skfd);
 
-    // bpf_tc_detach(&scatterProgTCHook, &scatterProgTCOpts);
-    // bpf_tc_hook_destroy(&scatterProgTCHook);
+    
+    // Detach all eBPF programs
     ebpf::TCHook::detach(scatterProgHookHandle);
-
-    // bpf_tc_detach(&gatherNotifyProgTCHook, &gatherNotifyProgTCOpts);
-    // bpf_tc_hook_destroy(&gatherNotifyProgTCHook);
     ebpf::TCHook::detach(gatherNotifyProgHookHandle);
-
-
-    // bpf_xdp_detach(ifindex, 0, 0);
     ebpf::XDPHook::detach(gatherProgHookHandle);
 
     return 0;

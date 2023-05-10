@@ -105,7 +105,6 @@ static inline int handle_clean_req_msg(char* payload, __u32 payload_size, void* 
 
     bpf_spin_lock(&rs->count_lock); // probably not needed, as it won't be under contention
     rs->count = 0;
-    rs->complete = 0;
     bpf_spin_unlock(&rs->count_lock);
 
     // reset the stale aggregated data
@@ -118,40 +117,6 @@ static inline int handle_clean_req_msg(char* payload, __u32 payload_size, void* 
 
     return TC_ACT_SHOT;
 }
-
-// static __always_inline __u8 num_workers_satisfied(struct req_state* rs, __u32 pk_count) {
-//     // The response count is set to the max negative number so that any packets
-//     // of the same request currently in-flight cannot reach the target count again
-    
-//     __u8 ret = 0;
-//     // bpf_spin_lock(&rs->count_lock);
-
-//     if (rs->policy == SG_MSG_F_WAIT_ANY) {
-//         // bpf_spin_lock(&rs->count_lock);
-//         rs->count = -MAX_SOCKETS_ALLOWED;
-//         // bpf_spin_unlock(&rs->count_lock);
-//         ret = 1;
-//     }
-//     else if (rs->policy == SG_MSG_F_WAIT_ALL) {
-//         // bpf_spin_lock(&rs->count_lock);
-//         if (pk_count == rs->num_workers) {
-//             rs->count = -MAX_SOCKETS_ALLOWED;
-//             ret = 1;
-//         } 
-//         // bpf_spin_unlock(&rs->count_lock);
-//     }
-//     else if (rs->policy == SG_MSG_F_WAIT_N) {
-//         // bpf_spin_lock(&rs->count_lock);
-//         if (pk_count == rs->num_workers) {
-//             rs->count = -MAX_SOCKETS_ALLOWED;
-//             ret = 1;
-//         } 
-//         // bpf_spin_unlock(&rs->count_lock);
-//     }
-//     // bpf_spin_unlock(&rs->count_lock);
-//     rs->complete = ret;
-//     return ret;
-// }
 
 SEC("tc")
 int scatter_prog(struct __sk_buff* skb) {
@@ -238,7 +203,6 @@ int scatter_prog(struct __sk_buff* skb) {
             return TC_ACT_SHOT;
         bpf_spin_lock(&rs->count_lock);
         rs->count = 0;
-        rs->complete = 0;
         bpf_spin_unlock(&rs->count_lock);
 
         rs->policy = sgh->hdr.flags; // THIS IS NOT EVEN NEEDED
@@ -432,6 +396,30 @@ int gather_prog(struct xdp_md* ctx) {
     if (!rs)
         return XDP_ABORTED;
 
+    // THE ISSUE IS THAT ONCE TWO PACKETS ARE PAST THIS CHECK,
+    // BOTH PACKETS WILL PERFORM AGGREGATION BUT ONLY ONE WILL BE SUCCESSFUL
+    // IN THE COMPLETION CHECK.
+    // HENCE THE COMPLETION CHECK MUST TAKE PLACE HERE (IE: BEFORE AGGREGATION)
+    bpf_spin_lock(&rs->count_lock);
+    if (rs->count < 0) {
+        bpf_spin_unlock(&rs->count_lock);
+        #ifdef BPF_DEBUG_PRINT
+        bpf_printk("dropping packet, completion flag set");
+        #endif
+        return XDP_DROP;
+    }
+
+    // TODO NEXT:
+    //  DONE--- Can we get rid of the complete flag and use negative values? wasn't working before
+    //  if so, can we use atomics??? should be able to bc we have a fixed num to wait for
+    //  remove reference to completion policy in kernel space (should be a suerspace config only)
+
+    // Check for completion and increment count
+    __s64 pk_count = ++rs->count;
+    rs->count = (rs->num_workers == pk_count) ? -(MAX_SOCKETS_ALLOWED + 1) : pk_count;
+    bpf_spin_unlock(&rs->count_lock);
+
+    // Annotate the packet metadata with its count
     if (bpf_xdp_adjust_meta(ctx, -(int) sizeof(__u32)) < 0)
         return XDP_ABORTED;
 
@@ -440,24 +428,6 @@ int gather_prog(struct xdp_md* ctx) {
     pk_count_meta = (void*)(unsigned long) ctx->data_meta;
     if (pk_count_meta + 1 > data_updated)
         return XDP_ABORTED;
-
-    // THE ISSUE IS THAT ONCE TWO PACKETS ARE PAST THIS CHECK,
-    // BOTH PACKETS WILL PERFORM AGGREGATION BUT ONLY ONE WILL BE SUCCESSFUL
-    // IN THE COMPLETION CHECK.
-    // HENCE THE COMPLETION CHECK MUST TAKE PLACE HERE (IE: BEFORE AGGREGATION)
-    bpf_spin_lock(&rs->count_lock);
-    if (rs->complete) {
-        bpf_spin_unlock(&rs->count_lock);
-        #ifdef BPF_DEBUG_PRINT
-        bpf_printk("dropping packet, completion flag set");
-        #endif
-        return XDP_DROP;
-    }
-    // Check for completion and increment count
-    __u32 pk_count = ++rs->count;
-    rs->complete = (rs->num_workers == pk_count);
-    bpf_spin_unlock(&rs->count_lock);
-
     *pk_count_meta = (__u32) pk_count;
 
     // DISCUSS: for performance, maybe just treat it as a function instead
@@ -568,7 +538,7 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
 
     // Check completion satisfied
     bpf_spin_lock(&rs->count_lock);
-    if (rs->complete && *pk_count == rs->num_workers) {
+    if (rs->count < 0 && *pk_count == rs->num_workers) {
         bpf_spin_unlock(&rs->count_lock);
 
         #ifdef BPF_DEBUG_PRINT

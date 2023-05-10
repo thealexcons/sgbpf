@@ -73,7 +73,6 @@ struct req_state {
     __s64                count;         // Num responses received
     struct bpf_spin_lock count_lock;    // Lock to R/W to count variable
     __u32                num_workers;   // Num workers to wait for completion
-    __u8                 complete;
     sg_msg_flags_t       policy;        // Completion policy (NOT NEEDED)
 };
 

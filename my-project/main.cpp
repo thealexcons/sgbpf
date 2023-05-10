@@ -91,8 +91,8 @@ int main(int argc, char** argv) {
     
     // EXAMPLE 1: Vector-based data (with in-kernel aggregation)
     sgbpf::ReqParams params; // set params here....
-    params.completionPolicy = sgbpf::GatherCompletionPolicy::WaitAny;
-    params.numWorkersToWait = 1;
+    params.completionPolicy = sgbpf::GatherCompletionPolicy::WaitN;
+    params.numWorkersToWait = 10;
     params.timeout = std::chrono::microseconds{100*1000}; // 10 ms
     
     // std::vector<uint64_t> times;

@@ -71,66 +71,66 @@ int main(int argc, char** argv) {
     // Standard method (BPF program)
     // export CUSTOM_AGGREGATION_BPF_PROG=$(pwd)/custom_aggregation.bpf.c
     // Using make --directory=../sgbpf bpf
-    // sgbpf::ContextParams ctxParams;
-    // ctxParams.bpfObjsPath = argv[1];
-    // ctxParams.customAggregationMode = sgbpf::AggregationMode::Program;
-    // ctxParams.ifname = argv[2];
-    // sgbpf::Context ctx{ctxParams};
+    sgbpf::ContextParams ctxParams;
+    ctxParams.bpfObjsPath = argv[1];
+    ctxParams.customAggregationMode = sgbpf::AggregationMode::Program;
+    ctxParams.ifname = argv[2];
+    sgbpf::Context ctx{ctxParams};
 
     // Using the alternative method (regular C function for custom aggregation)
     // export CUSTOM_AGGREGATION_FUNCTION=$(pwd)/custom_agg_func.bpf.h
     // Using make --directory=../sgbpf bpf_func
-    sgbpf::ContextParams ctxParams;
-    ctxParams.bpfObjsPath = argv[1];
-    ctxParams.customAggregationMode = sgbpf::AggregationMode::Function;
-    ctxParams.ifname = argv[2];
-    sgbpf::Context ctx{ctxParams};
+    // sgbpf::ContextParams ctxParams;
+    // ctxParams.bpfObjsPath = argv[1];
+    // ctxParams.customAggregationMode = sgbpf::AggregationMode::Function;
+    // ctxParams.ifname = argv[2];
+    // sgbpf::Context ctx{ctxParams};
 
     auto workers = sgbpf::Worker::fromFile("workers.cfg");
     sgbpf::Service service{ctx, workers};
     
     // EXAMPLE 1: Vector-based data (with in-kernel aggregation)
     sgbpf::ReqParams params; // set params here....
-    params.completionPolicy = sgbpf::GatherCompletionPolicy::WaitN;
+    params.completionPolicy = sgbpf::GatherCompletionPolicy::WaitAny;
     params.numWorkersToWait = 10;
     params.timeout = std::chrono::microseconds{100*1000}; // 10 ms
     
-    std::vector<uint64_t> times;
-    times.reserve(100);
-    for (auto i = 0u; i < 100; i++) {
-        BenchmarkTimer t{times};
-        auto req = service.scatter("SCATTER", 8, params);
-        sg_msg_t buf;
-        auto b = read(service.ctrlSkFd(), &buf, sizeof(sg_msg_t));
-        assert(b == sizeof(sg_msg_t));
-        assert(buf.hdr.req_id == req->id());
-        service.processEvents();
-        // std::this_thread::sleep_for(std::chrono::microseconds{100});
-    }
-
-    std::cout << "Max E2E latency (us) = " << BenchmarkTimer::maxTime(times) << std::endl;
-    std::cout << "Min E2E latency (us) = " << BenchmarkTimer::minTime(times) << std::endl;
-    std::cout << "Avg E2E latency (us) = " << BenchmarkTimer::avgTime(times) << std::endl;
-    std::cout << "Median E2E latency (us) = " << BenchmarkTimer::medianTime(times) << std::endl;
-
-    // std::cout << "sent scatter request" << std::endl;
-
-    // Wait on the ctrl socket to finish
-    // sg_msg_t buf;
-    // auto b = read(service.ctrlSkFd(), &buf, sizeof(sg_msg_t));
-    // assert(b == sizeof(sg_msg_t));
-    // assert(buf.hdr.req_id == req->id());
-
-    // service.processEvents();
-    
-    // auto aggregatedData = (uint32_t*)(buf.body);
-    // std::cout << "control socket packet received\n";
-    // for (auto i = 0u; i < RESP_MAX_VECTOR_SIZE; i++) {
-    //     if (i % 25 == 0)
-    //         std::cout << "vec[" << i << "] = " << aggregatedData[i] << std::endl;
+    // std::vector<uint64_t> times;
+    // times.reserve(100);
+    // for (auto i = 0u; i < 100; i++) {
+    //     BenchmarkTimer t{times};
+    //     auto req = service.scatter("SCATTER", 8, params);
+    //     sg_msg_t buf;
+    //     auto b = read(service.ctrlSkFd(), &buf, sizeof(sg_msg_t));
+    //     assert(b == sizeof(sg_msg_t));
+    //     assert(buf.hdr.req_id == req->id());
+    //     service.processEvents();
+    //     // std::this_thread::sleep_for(std::chrono::microseconds{100});
     // }
 
-    // std::cout << "Got a total of " << req->bufferPointers().size() << std::endl;
+    // std::cout << "Max E2E latency (us) = " << BenchmarkTimer::maxTime(times) << std::endl;
+    // std::cout << "Min E2E latency (us) = " << BenchmarkTimer::minTime(times) << std::endl;
+    // std::cout << "Avg E2E latency (us) = " << BenchmarkTimer::avgTime(times) << std::endl;
+    // std::cout << "Median E2E latency (us) = " << BenchmarkTimer::medianTime(times) << std::endl;
 
-    // service.freeRequest(req, true);
+    // std::cout << "sent scatter request" << std::endl;
+    auto req = service.scatter("SCATTER", 8, params);
+
+    sg_msg_t buf;
+    auto b = read(service.ctrlSkFd(), &buf, sizeof(sg_msg_t));
+    assert(b == sizeof(sg_msg_t));
+    assert(buf.hdr.req_id == req->id());
+
+    service.processEvents();
+    
+    auto aggregatedData = (uint32_t*)(buf.body);
+    std::cout << "control socket packet received\n";
+    for (auto i = 0u; i < RESP_MAX_VECTOR_SIZE; i++) {
+        if (i % 25 == 0)
+            std::cout << "vec[" << i << "] = " << aggregatedData[i] << std::endl;
+    }
+
+    std::cout << "Got a total of " << req->bufferPointers().size() << std::endl;
+
+    service.freeRequest(req, true);
 }

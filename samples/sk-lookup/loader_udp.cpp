@@ -89,10 +89,12 @@ int main(int argc, char** argv) {
     auto sockfd = static_cast<uint64_t>(skfd);
     socketMap.update(&zero, &sockfd, BPF_NOEXIST);
 
-    std::cout << "added skfd to map:" << skfd << std::endl;
-    int verifyFd = -2;
-    socketMap.find(&zero, &verifyFd);
-    std::cout << "verify map sk: " << verifyFd << std::endl;
+    // Add some local storage to the socket
+    auto skStorageMap = obj.findMapByName("map_sk_storage").value();
+    struct sk_storage {
+        __u32 data;
+    } storage = { .data = 42 };
+    socketMap.update(&sockfd, &storage);
     
     sockaddr_in clientAddr;
     memset(&clientAddr, 0, sizeof(clientAddr));

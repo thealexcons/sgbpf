@@ -151,7 +151,8 @@ int scatter_prog(struct __sk_buff* skb) {
     // sudo sysctl -w kernel.bpf_stats_enabled=1   (remember to turn off)
     // Then, do:
     // sudo cat /proc/<LOADER_PID>/fdinfo/<BPF_PROG_FD>
-    // The loader pid is typically 2nd after running: ps aux | grep "loader"
+    // The loader pid is typically 2nd (w/o sudo) after running: ps aux | grep "loader"
+    // however this seems to be mismatched with manually timing it.
 
     // Intercept any outgoing scatter messages from the application
     // TODO Maybe there's a better way to intercept traffic from a particular socket

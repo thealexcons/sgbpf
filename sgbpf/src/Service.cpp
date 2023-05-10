@@ -263,7 +263,9 @@ void Service::processPendingEvents(int requestID) {
                 }
 
                 if (req.d_status == Request::Status::TimedOut || req.hasTimedOut()) {
-                    std::cout << "[DEBUG] Request " << req.id() << " has timed out" << std::endl;
+                    #ifdef DEBUG_PRINT
+                    std::cout << "[DEBUG] Request " << req.id() << " has timed out" << std::endl;                    
+                    #endif
                     req.d_status = Request::Status::TimedOut;
                     continue;
                 }
@@ -272,14 +274,21 @@ void Service::processPendingEvents(int requestID) {
                 // Drop any unnecessary packets (for messages beyond N in waitN or 1 in waitAny)
                 // this is currently the implementation
                 if (req.d_status == Request::Status::Ready) {
+                    #ifdef DEBUG_PRINT
                     std::cout << "[DEBUG] Dropping packet (request completed already)" << std::endl;
+                    #endif
                     continue;
                 }
                 
+                #ifdef DEBUG_PRINT
                 std::cout << "Got pk " << conn_i->fd << " for req " << req.id() << std::endl;
+                #endif
+
                 req.addBufferPtr(conn_i->fd, buffIdx);
                 if (req.receivedSufficientPackets()) {
+                    #ifdef DEBUG_PRINT
                     std::cout << "[DEBUG] Request " << req.id() << " is ready" << std::endl;
+                    #endif
                     req.d_status = Request::Status::Ready;
                 }
 
@@ -306,7 +315,9 @@ void Service::processPendingEvents(int requestID) {
     io_uring_cq_advance(&d_ioCtx.ring, count);
 
     if (submitPendingReads) {
+        #ifdef DEBUG_PRINT
         std::cout << "submitting pending reads from event loop (mistmatch in expected number of packets in resp)" << std::endl;
+        #endif
         io_uring_submit(&d_ioCtx.ring);
         submitPendingReads = false;
     }

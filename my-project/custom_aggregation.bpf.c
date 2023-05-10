@@ -24,13 +24,23 @@ int aggregation_prog(struct xdp_md* xdp_ctx) {
 
     // ITEM LIST (IN ORDER OF PRIORITY):
 
+    // LOOK INTO PER SOCKET STORAGE FOR THE FUTURE WORK SECTION
+
+    // bpf prog: (note these have ASan on, can't get rid of it)
+    // Max E2E latency (us) = 2591
+    // Min E2E latency (us) = 1357
+    // Avg E2E latency (us) = 1732.93
+    // Median E2E latency (us) = 1681
+    // regular func:
+    // Max E2E latency (us) = 2911
+    // Min E2E latency (us) = 1358
+    // Avg E2E latency (us) = 1693.11
+    // Median E2E latency (us) = 1629
+    // very similar measurements. is this because of ASan?
+
     // TODO: Unify aggregation types for VECTOR and SCALAR data (in common.h)
     //  4. consider ebpf prog vs regular func call for custom aggregation logic
     //      in terms of performance, ease of use, etc.
-
-    //  TIME OUT MECHANISM: measure in userspace, if timed out, make syscall to
-    //      cleanup state in the ebpf program (unoptimised path)
-    //  this is essentially done, except the time out cleanup
 
     // FIX RACE CONDITION FOR COUNT ATOMICS
 

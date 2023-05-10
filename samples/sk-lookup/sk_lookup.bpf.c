@@ -22,6 +22,17 @@ struct {
     __uint(pinning, LIBBPF_PIN_BY_NAME); // sudo rm /sys/fs/bpf/map_socket
 } map_socket SEC(".maps");
 
+struct sk_storage {
+    __u32 data;
+};
+
+struct {
+    __uint(type, BPF_MAP_TYPE_SK_STORAGE);
+    __uint(map_flags, BPF_F_NO_PREALLOC);
+    __type(key, __u32);
+    __type(value, struct sk_storage);
+    __uint(max_entries, 0);
+} map_sk_storage SEC(".maps");
 
 SEC("sk_lookup")
 int dispatch_prog(struct bpf_sk_lookup* ctx) {
@@ -48,6 +59,14 @@ int dispatch_prog(struct bpf_sk_lookup* ctx) {
     }
 
     bpf_printk("Got bpf_sock from map: %d", sk->src_port);
+
+    // Unknown func when loading.... maybe include path is not using correct
+    // version of BPF??
+    // struct sk_storage* stg = bpf_sk_storage_get(&map_sk_storage, sk, 0, 0);
+    // if (!stg)
+        // return SK_DROP;
+    // bpf_printk("Got data storage from map: %d", stg->data);
+
 
     long err = bpf_sk_assign(ctx, sk, 0);
     bpf_sk_release(sk);

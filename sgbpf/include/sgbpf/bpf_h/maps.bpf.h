@@ -56,24 +56,13 @@ struct {
     __uint(max_entries, MAX_SOCKETS_ALLOWED);
 } map_workers_resp_status SEC(".maps");
 
-// Stores the timing information about requests for handling time outs
-// struct req_timing {
-//     __u64 start_ns;
-//     __u64 timeout_ns;
-// };
-// struct {
-//     __uint(type, BPF_MAP_TYPE_ARRAY);
-//     __type(key, __u32);
-//     __type(value, struct req_timing);
-//     __uint(max_entries, MAX_ACTIVE_REQUESTS_ALLOWED);
-// } map_req_timing SEC(".maps");
 
-
+// State associated to each request
 struct req_state {
     __s64                count;         // Num responses received
     struct bpf_spin_lock count_lock;    // Lock to R/W to count variable
-    __u32                num_workers;   // Num workers to wait for completion
-    sg_msg_flags_t       policy;        // Completion policy (NOT NEEDED)
+    __s32                num_workers;   // Num workers to wait for completion
+    __u8                 complete;
 };
 
 struct {
@@ -84,20 +73,11 @@ struct {
     __uint(pinning, LIBBPF_PIN_BY_NAME);
 } map_req_state SEC(".maps");
 
-// Stores the number of packets received for each request ID
-
-// struct {
-//     __uint(type, BPF_MAP_TYPE_ARRAY);
-//     __type(key, __u32);
-//     __type(value, __s64);
-//     __uint(max_entries, MAX_ACTIVE_REQUESTS_ALLOWED);
-//     __uint(pinning, LIBBPF_PIN_BY_NAME);
-// } map_workers_resp_count SEC(".maps");
 
 // The total current value of the aggregated responses
 struct aggregation_entry {
-    RESP_VECTOR_TYPE data[RESP_MAX_VECTOR_SIZE];
     struct bpf_spin_lock lock;
+    RESP_VECTOR_TYPE data[RESP_MAX_VECTOR_SIZE];
 };
 
 struct {
@@ -107,6 +87,19 @@ struct {
     __uint(max_entries, MAX_ACTIVE_REQUESTS_ALLOWED);
     __uint(pinning, LIBBPF_PIN_BY_NAME);
 } map_aggregated_response SEC(".maps");
+
+
+struct tmp_data {
+    RESP_VECTOR_TYPE data[RESP_MAX_VECTOR_SIZE];
+};
+
+struct {
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+    __type(key, __u32);
+    __type(value, struct tmp_data);
+    __uint(max_entries, 1);
+} map_tmp_data SEC(".maps");
+
 
 // FOr multi-packet vector aggregation, extra layer of indirection is needed
 // to store MAX_PACKETS * DATA_ARRAY per request

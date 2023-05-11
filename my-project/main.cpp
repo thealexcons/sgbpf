@@ -80,6 +80,7 @@ int main(int argc, char** argv) {
     // Using the alternative method (regular C function for custom aggregation)
     // export CUSTOM_AGGREGATION_FUNCTION=$(pwd)/custom_agg_func.bpf.h
     // Using make --directory=../sgbpf bpf_func
+    // USELESS
     // sgbpf::ContextParams ctxParams;
     // ctxParams.bpfObjsPath = argv[1];
     // ctxParams.customAggregationMode = sgbpf::AggregationMode::Function;
@@ -113,25 +114,57 @@ int main(int argc, char** argv) {
     // std::cout << "Avg E2E latency (us) = " << BenchmarkTimer::avgTime(times) << std::endl;
     // std::cout << "Median E2E latency (us) = " << BenchmarkTimer::medianTime(times) << std::endl;
 
+    // WAIT ALL WORKS PERFECTLY FINE
+    // MUST BE RELATED TO THE DROPPED PACKETS IN WAIT_N ??
+    // also not UDP reliability issues because setting WAIT N = all - 1 still fails
+    // IF WE DON'T DROP REDUNDANT PACKETS (LINE 368 IN EBPF), WE CAN JUST IGNORE THEM IN USERSPACE
+    // still seems to be a bug...
+    // idek, goes on streaks where it works, sometimes randomly gives num pk mismatch??
+
+    // HOWEVER, STILL NEED TO FIX DATA MISMATCH. SOME SORT OF RACE CONDITION ON THE DATA??
+
+    // WHEN SENDING MANY REQUESTS, AT SOME POINT IT LOOKS LIKE THEY GET STUCK
+    // AROUND REQ 427.
+    // looks like workers ARE NOT sending data back? maybe they crashed?
+
     // std::cout << "sent scatter request" << std::endl;
-    auto req = service.scatter("SCATTER", 8, params);
+    for (auto i = 0u; i < 500; i++) {
+        auto req = service.scatter("SCATTER", 8, params);
 
-    sg_msg_t buf;
-    auto b = read(service.ctrlSkFd(), &buf, sizeof(sg_msg_t));
-    assert(b == sizeof(sg_msg_t));
-    assert(buf.hdr.req_id == req->id());
+        sg_msg_t buf;
+        auto b = read(service.ctrlSkFd(), &buf, sizeof(sg_msg_t));
+        assert(b == sizeof(sg_msg_t));
+        assert(buf.hdr.req_id == req->id());
 
-    service.processEvents();
+        // while (req->bufferPointers().size() != params.numWorkersToWait)
+        service.processEvents(req->id());
+        
+        auto aggregatedData = (uint32_t*)(buf.body);
+        // std::cout << "control socket packet received\n";
+        for (auto j = 0u; j < RESP_MAX_VECTOR_SIZE; j++) {
+            if (j % 5 == 0) {
+                bool c = aggregatedData[j] == j * params.numWorkersToWait;
+                if(!c) {
+                    std::cout << "DATA MISMATCH on REQ " << i << " - Got " << aggregatedData[j] << " at idx " << j << " instead of " << j * params.numWorkersToWait << std::endl;
+                    throw;
+                }
+                assert(c);
+            }
+            // std::cout << "vec[" << i << "] = " << aggregatedData[i] << std::endl;
+        }
+        bool c = req->bufferPointers().size() == params.numWorkersToWait;
+        if(!c) {
+            std::cout << "NUM PKS MISMATCH on REQ " << i << " - Got " << req->bufferPointers().size() << " instead of " << params.numWorkersToWait << std::endl;
+            throw;
+        }
+        assert(c);
+
+        // std::cout << "vec[" << 300 << "] = " << aggregatedData[300] << std::endl;
+        // std::cout << "Got a total of " << req->bufferPointers().size() << std::endl;
+
+        // service.freeRequest(req, true);
+
+        std::this_thread::sleep_for(std::chrono::microseconds{300});
+    }
     
-    auto aggregatedData = (uint32_t*)(buf.body);
-    std::cout << "control socket packet received\n";
-    // for (auto i = 0u; i < RESP_MAX_VECTOR_SIZE; i++) {
-    //     if (i % 25 == 0)
-    //         std::cout << "vec[" << i << "] = " << aggregatedData[i] << std::endl;
-    // }
-    std::cout << "vec[" << 300 << "] = " << aggregatedData[300] << std::endl;
-
-    std::cout << "Got a total of " << req->bufferPointers().size() << std::endl;
-
-    service.freeRequest(req, true);
 }

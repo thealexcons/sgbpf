@@ -18,7 +18,7 @@ typedef struct conn_info {
 } conn_info_t;
 
 // Add a socket read operation to the IO ring
-void addSocketRead(io_uring *ring, int fd, unsigned gid, size_t message_size, unsigned flags) {
+inline void addSocketRead(io_uring *ring, int fd, unsigned gid, size_t message_size, unsigned flags) {
     io_uring_sqe *sqe = io_uring_get_sqe(ring);
     io_uring_prep_recv(sqe, fd, NULL, message_size, MSG_WAITALL); // wait for all fragments to arrive
     io_uring_sqe_set_flags(sqe, flags);
@@ -34,7 +34,7 @@ void addSocketRead(io_uring *ring, int fd, unsigned gid, size_t message_size, un
 
 
 // Add a scatter send request to the IO ring
-void addScatterSend(io_uring* ring, int skfd, int reqID, sockaddr_in* servAddr, const char* msg, size_t len, unsigned char flags, unsigned int num_pks) {
+inline void addScatterSend(io_uring* ring, int skfd, int reqID, sockaddr_in* servAddr, const char* msg, size_t len, unsigned char flags, unsigned int num_pks) {
     // Send the message to itself
     sg_msg_t scatter_msg;
     memset(&scatter_msg, 0, sizeof(sg_msg_t));
@@ -66,6 +66,7 @@ void addScatterSend(io_uring* ring, int skfd, int reqID, sockaddr_in* servAddr, 
     conn_info_t conn_i = {
         .fd = skfd,
         .type = IO_WRITE,
+        .bgid = 0,
     };
     memcpy(&sqe->user_data, &conn_i, sizeof(conn_info_t));
 }
@@ -184,7 +185,6 @@ Request* Service::scatter(const char* msg, size_t len, ReqParams params)
     }
 
     int reqId = s_nextRequestID++;
-    Request* req = nullptr;
     // TODO: this can be a fixed size array because we have a limit
     // on the maximum number of active requests
     d_activeRequests.emplace(std::piecewise_construct,
@@ -192,7 +192,7 @@ Request* Service::scatter(const char* msg, size_t len, ReqParams params)
             std::forward_as_tuple(reqId, d_workers, params)
     );
 
-    req = &d_activeRequests[reqId];
+    Request* req = &d_activeRequests[reqId];
     // TODO need a garbage collection mechanism to free the memory used
     // by cancelled and old requests
     // How to handle this?? buffers can be recycled by submitting another provide_buffers
@@ -242,74 +242,71 @@ void Service::processPendingEvents(int requestID) {
         const auto conn_i = reinterpret_cast<conn_info_t*>(&cqe->user_data);
 
         if (cqe->res == -ENOBUFS) {
-            // NOTIFY USER THAT WE ARE OUT OF SPACE
-            fprintf(stdout, "bufs in automatic buffer selection empty, this should not happen...\n");
-            fflush(stdout);
-            exit(1);
+            // should not happen
+            throw std::runtime_error{"No buffers available to read packet data."};
         }
         
-        if (conn_i->type == IO_READ) {
-            if (cqe->res <= 0) {
-                close(conn_i->fd);
-            } else {
-                auto reqId = conn_i->bgid;           // the packet's request ID
-                auto buffIdx = cqe->flags >> 16;     // the packet's buffer index
-                auto& req = d_activeRequests[reqId]; // get the associated request
-                const auto resp = (sg_msg_t*) req.data(buffIdx);
+        if (conn_i->type == IO_READ && cqe->res > 0) {
+            auto reqId = conn_i->bgid;                              // the packet's request ID
+            auto buffIdx = cqe->flags >> IORING_CQE_BUFFER_SHIFT;   // the packet's buffer index
+            auto& req = d_activeRequests[reqId];                    // get the associated request
+            const auto resp = (sg_msg_t*) req.data(buffIdx);
 
-                // If we are only processing packets for a given request
-                if (processOnlyGivenReq && resp->hdr.req_id != static_cast<uint32_t>(req.id())) {
-                    continue;
-                }
-
-                if (req.d_status == Request::Status::TimedOut || req.hasTimedOut()) {
-                    #ifdef DEBUG_PRINT
-                    std::cout << "[DEBUG] Request " << req.id() << " has timed out" << std::endl;                    
-                    #endif
-                    req.d_status = Request::Status::TimedOut;
-                    continue;
-                }
-
-                // TODO do we want these semantics?
-                // Drop any unnecessary packets (for messages beyond N in waitN or 1 in waitAny)
-                // this is currently the implementation
-                if (req.d_status == Request::Status::Ready) {
-                    #ifdef DEBUG_PRINT
-                    std::cout << "[DEBUG] Dropping packet (request completed already)" << std::endl;
-                    #endif
-                    continue;
-                }
-                
+            // If we are only processing packets for a given request
+            if (processOnlyGivenReq && (req.id() != requestID || resp->hdr.req_id != static_cast<uint32_t>(req.id()))) {
                 #ifdef DEBUG_PRINT
-                std::cout << "Got pk " << conn_i->fd << " for req " << req.id() << std::endl;
+                std::cout << "[DEBUG] Ignoring packet with ID " << req.id() << ", only processing pks from req " << requestID << '\n';                    
+                std::cout << "\t hdr.req_id = " << resp->hdr.req_id << " req.id() = " << req.id() << " requestID = " << requestID << std::endl;
                 #endif
-
-                req.addBufferPtr(conn_i->fd, buffIdx);
-                if (req.receivedSufficientPackets()) {
-                    #ifdef DEBUG_PRINT
-                    std::cout << "[DEBUG] Request " << req.id() << " is ready" << std::endl;
-                    #endif
-                    req.d_status = Request::Status::Ready;
-                }
-
-                // check for multi-packet message and add more reads if necessary
-                if (req.d_expectedPacketsPerMessage != resp->hdr.num_pks && resp->hdr.num_pks > 1) {
-                    req.d_expectedPacketsPerMessage = resp->hdr.num_pks;                       
-                }
-
-                int remaining = 0;
-                for (const auto& [wfd, ptrs] : req.d_workerBufferPtrs) {
-                    auto pksRemainingForThisWorker = abs(req.d_expectedPacketsPerMessage - ptrs.size());
-                    if (pksRemainingForThisWorker > 0) {
-                        remaining += pksRemainingForThisWorker;
-
-                        // Add the remaining socket read operations to the SQ
-                        for (auto i = 0; i < pksRemainingForThisWorker; i++)
-                            addSocketRead(&d_ioCtx.ring, wfd, req.id(), Request::MaxBufferSize, IOSQE_BUFFER_SELECT);
-                    }
-                }
-                submitPendingReads = (remaining > 0);
+                continue;
             }
+
+            if (req.d_status == Request::Status::TimedOut || req.hasTimedOut()) {
+                #ifdef DEBUG_PRINT
+                std::cout << "[DEBUG] Request " << req.id() << " has timed out" << std::endl;                    
+                #endif
+                req.d_status = Request::Status::TimedOut;
+                continue;
+            }
+
+            // Drop any unnecessary packets (for messages beyond N in waitN or 1 in waitAny)
+            // this is currently the implementation
+            if (req.d_status == Request::Status::Ready) {
+                #ifdef DEBUG_PRINT
+                // std::cout << "[DEBUG] Dropping packet (request completed already)" << std::endl;
+                #endif
+                continue;
+            }
+            
+            #ifdef DEBUG_PRINT
+            // std::cout << "Got pk on fd " << conn_i->fd << " for req " << req.id() << std::endl;
+            #endif
+
+            req.addBufferPtr(conn_i->fd, buffIdx);
+            if (req.receivedSufficientPackets()) {
+                #ifdef DEBUG_PRINT
+                std::cout << "[DEBUG] Request " << req.id() << " is ready" << std::endl;
+                #endif
+                req.d_status = Request::Status::Ready;
+            }
+
+            // check for multi-packet message and add more reads if necessary
+            if (req.d_expectedPacketsPerMessage != resp->hdr.num_pks && resp->hdr.num_pks > 1) {
+                req.d_expectedPacketsPerMessage = resp->hdr.num_pks;                       
+            }
+
+            int remaining = 0;
+            for (const auto& [wfd, ptrs] : req.d_workerBufferPtrs) {
+                auto pksRemainingForThisWorker = abs(req.d_expectedPacketsPerMessage - ptrs.size());
+                if (pksRemainingForThisWorker > 0) {
+                    remaining += pksRemainingForThisWorker;
+
+                    // Add the remaining socket read operations to the SQ
+                    for (auto i = 0; i < pksRemainingForThisWorker; i++)
+                        addSocketRead(&d_ioCtx.ring, wfd, req.id(), Request::MaxBufferSize, IOSQE_BUFFER_SELECT);
+                }
+            }
+            submitPendingReads = (remaining > 0);
         }
     }
     io_uring_cq_advance(&d_ioCtx.ring, count);
@@ -325,6 +322,10 @@ void Service::processPendingEvents(int requestID) {
 
 
 void Service::freeRequest(Request* req, bool immediate) {
+    // Free the IO uring buffers
+    req->freeBuffers(&d_ioCtx.ring);
+
+    // Send a clean up message to eBPF to reset any old state
     sg_clean_req_msg_t cleanMsg = {
         .magic = SG_CLEAN_REQ_MSG_MAGIC,
         .req_id = static_cast<unsigned int>(req->id()),
@@ -344,7 +345,6 @@ void Service::freeRequest(Request* req, bool immediate) {
     io_uring_sqe *sqe = io_uring_get_sqe(&d_ioCtx.ring);
     io_uring_prep_sendmsg(sqe, d_scatterSkFd, &msgh, 0);
     io_uring_sqe_set_flags(sqe, 0);
-
     if (immediate)
         io_uring_submit(&d_ioCtx.ring);
 }

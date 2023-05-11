@@ -75,13 +75,13 @@ static __u64 send_worker(void* map, __u32* idx, worker_info_t* worker, struct se
     return 0;   // Continue to next worker destination (return 0)
 }
 
-static __always_inline void reset_aggregated_vector(RESP_VECTOR_TYPE* agg_vector) {
+static __always_inline void clear_vector(RESP_VECTOR_TYPE* agg_vector) {
     // ebpf sets a maximum size for memset, so we need to "hack" around it
     #define MAX_CONTIGUOUS_MEMSET_SIZE 256
 
     #pragma clang loop unroll(full)
     for (__u32 i = 0; i < RESP_MAX_VECTOR_SIZE; ++i) {
-        if (__glibc_unlikely(MOD_POW2(i, MAX_CONTIGUOUS_MEMSET_SIZE) == 0)) {
+        if (UNLIKELY( MOD_POW2(i, MAX_CONTIGUOUS_MEMSET_SIZE) == 0 )) {
             asm volatile("" ::: "memory"); // dummy instruction needed to break the memset, need something cheap
         }
         agg_vector[i] = 0;
@@ -105,6 +105,7 @@ static inline int handle_clean_req_msg(char* payload, __u32 payload_size, void* 
 
     bpf_spin_lock(&rs->count_lock); // probably not needed, as it won't be under contention
     rs->count = 0;
+    rs->complete = 0;
     bpf_spin_unlock(&rs->count_lock);
 
     // reset the stale aggregated data
@@ -112,7 +113,7 @@ static inline int handle_clean_req_msg(char* payload, __u32 payload_size, void* 
     if (!agg_entry)
         return TC_ACT_SHOT;
     bpf_spin_lock(&agg_entry->lock);
-    reset_aggregated_vector(agg_entry->data);
+    clear_vector(agg_entry->data);
     bpf_spin_unlock(&agg_entry->lock);
 
     return TC_ACT_SHOT;
@@ -190,12 +191,14 @@ int scatter_prog(struct __sk_buff* skb) {
         if (sgh->hdr.msg_type != SCATTER_MSG)
             return TC_ACT_OK;
 
+        __u32 slot = GET_REQ_MAP_SLOT(sgh->hdr.req_id);
+
         // Configure request settings from the provided flags (completion policy)
+        bpf_printk("======================NEW REQ %d==============================", sgh->hdr.req_id);
         #ifdef BPF_DEBUG_PRINT
         bpf_printk("Got SCATTER request");
         #endif
 
-        __u32 slot = GET_REQ_MAP_SLOT(sgh->hdr.req_id);
 
         // Reset count (NOTE: this must go here, NOT in the ctrl sk notification)
         struct req_state* rs = bpf_map_lookup_elem(&map_req_state, &slot);
@@ -203,34 +206,14 @@ int scatter_prog(struct __sk_buff* skb) {
             return TC_ACT_SHOT;
         bpf_spin_lock(&rs->count_lock);
         rs->count = 0;
+        rs->complete = 0;
         bpf_spin_unlock(&rs->count_lock);
 
-        rs->policy = sgh->hdr.flags; // THIS IS NOT EVEN NEEDED
-        // POLICY SIMPLY SETS THE NUM WORKERS IN USER SPACE, KERNEL ONLY NEEDS
-        // TO KNOW THE NUM WORKERS
         rs->num_workers = sgh->hdr.num_pks;
 
         #ifdef BPF_DEBUG_PRINT
-            bpf_printk("Gotnum workers to WAIT = %d", rs->num_workers);
-        // if (sgh->hdr.flags == SG_MSG_F_WAIT_ANY) {
-        //     bpf_printk("Got WAIT_ANY completion policy");
-        // } else if (sgh->hdr.flags == SG_MSG_F_WAIT_N) {
-        //     bpf_printk("Got WAIT_N completion policy with %d workers to wait", sgh->hdr.num_pks);
-        // } else {
-        //     bpf_printk("Got default WAIT_ALL completion policy");
-        // }
+            bpf_printk("Got num workers to WAIT = %d", rs->num_workers);
         #endif
-        // start timer for request
-        /*
-        struct req_timing* rqt = bpf_map_lookup_elem(&map_req_timing, &slot);
-        if (!rqt)
-            return TC_ACT_OK;
-
-        rqt->start_ns = bpf_ktime_get_ns();
-        rqt->timeout_ns = 10 * 1000000; // default timeout of 10ms
-        */
-        // Instead of using a syscall to set the timeout for each request, maybe
-        // include the timeout value (in micros or millis) in the header when sent out
 
         // Clone the outgoing packet to all the registered workers
         struct send_worker_ctx data = {
@@ -285,15 +268,6 @@ int scatter_prog(struct __sk_buff* skb) {
 //     bpf_map_update_elem(map, worker, &updated_status, 0);
 //     return 0;
 // }
-
-// inline static void cleanup_request_state(__u32 reqId) {
-//     // TODO cleanup all state for the given request
-// }
-
-// // TODO have time out check in userspace, if timed out, invoke syscall to cleanup
-// inline static __u8 request_timed_out(struct req_timing* rqt) {
-//     return (bpf_ktime_get_ns() - rqt->start_ns > rqt->timeout_ns);
-// } 
 
 
 SEC("xdp")
@@ -353,20 +327,6 @@ int gather_prog(struct xdp_md* ctx) {
     if (resp_msg->hdr.msg_type != GATHER_MSG)
         return XDP_DROP;
 
-    // Check for time-out
-    /*
-    __u32 slot = GET_REQ_MAP_SLOT(resp_msg->hdr.req_id);
-    struct req_timing* rqt = bpf_map_lookup_elem(&map_req_timing, &slot);
-    if (!rqt)
-        return XDP_ABORTED;
-
-    if (request_timed_out(rqt)) {
-        // TODO perform cleanup
-        cleanup_request_state(resp_msg->hdr.req_id); // or just pass in the map ptrs directly
-        bpf_printk("Request %d timed out!!!!", resp_msg->hdr.req_id);
-        return XDP_DROP;
-    }*/
-
     // If this is a multi-packet message, forward the packet without aggregation
     if (resp_msg->hdr.num_pks > 1 && resp_msg->hdr.seq_num <= resp_msg->hdr.num_pks) {
         #ifdef BPF_DEBUG_PRINT
@@ -384,7 +344,7 @@ int gather_prog(struct xdp_md* ctx) {
         return XDP_PASS;
     } else {
         #ifdef BPF_DEBUG_PRINT
-        bpf_printk("processing msg from worker %d with flags %d", bpf_ntohs(worker.worker_port), resp_msg->hdr.flags);
+        bpf_printk("processing msg from worker %d", bpf_ntohs(worker.worker_port));
         #endif
     }
 
@@ -401,22 +361,21 @@ int gather_prog(struct xdp_md* ctx) {
     // IN THE COMPLETION CHECK.
     // HENCE THE COMPLETION CHECK MUST TAKE PLACE HERE (IE: BEFORE AGGREGATION)
     bpf_spin_lock(&rs->count_lock);
-    if (rs->count < 0) {
+    if (rs->complete) {
         bpf_spin_unlock(&rs->count_lock);
         #ifdef BPF_DEBUG_PRINT
         bpf_printk("dropping packet, completion flag set");
         #endif
-        return XDP_DROP;
+        return XDP_PASS;
     }
 
-    // TODO NEXT:
-    //  DONE--- Can we get rid of the complete flag and use negative values? wasn't working before
-    //  if so, can we use atomics??? should be able to bc we have a fixed num to wait for
-    //  remove reference to completion policy in kernel space (should be a suerspace config only)
+    //_atomic_compare_exchange_n(&rs->count, &rs->num_workers, - (MAX_SOCKETS_ALLOWED+1), 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+    // TODO: can we use atomics???
 
     // Check for completion and increment count
     __s64 pk_count = ++rs->count;
-    rs->count = (rs->num_workers == pk_count) ? -(MAX_SOCKETS_ALLOWED + 1) : pk_count;
+    rs->complete = (rs->num_workers == pk_count);
+    // rs->count = (rs->num_workers == pk_count) ? -(MAX_SOCKETS_ALLOWED + 1) : pk_count;
     bpf_spin_unlock(&rs->count_lock);
 
     // Annotate the packet metadata with its count
@@ -439,6 +398,8 @@ int gather_prog(struct xdp_md* ctx) {
     bpf_tail_call(ctx, &map_aggregation_progs, CUSTOM_AGGREGATION_PROG);
     return XDP_PASS;
 #else
+    // REPARSING NEEDED.... therefore, custom header file is probably useless
+
     // Alternative method: use regular function call defined in supplied header file
     struct aggregation_entry* agg_entry = bpf_map_lookup_elem(&map_aggregated_response, &slot);
     if (!agg_entry)
@@ -509,18 +470,6 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         || resp_msg->hdr.msg_type != GATHER_MSG)
         return TC_ACT_OK;
 
-    
-    /*
-    struct req_timing* rqt = bpf_map_lookup_elem(&map_req_timing, &slot);
-    if (!rqt)
-        return TC_ACT_OK;
-    if (request_timed_out(rqt)) {
-        // TODO perform cleanup
-        cleanup_request_state(resp_msg->hdr.req_id); // or just pass in the map ptrs directly
-        bpf_printk("Request %d timed out!!!!", resp_msg->hdr.req_id);
-        return TC_ACT_SHOT;
-    }
-    */
 
     __u32 slot = GET_REQ_MAP_SLOT(resp_msg->hdr.req_id);
 
@@ -536,13 +485,13 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
     if (!rs)
         return TC_ACT_SHOT;
 
-    // Check completion satisfied
+    // Check completion satisfied and this is indeed the last required packet
     bpf_spin_lock(&rs->count_lock);
-    if (rs->count < 0 && *pk_count == rs->num_workers) {
+    if (rs->complete && *pk_count == rs->num_workers) {
         bpf_spin_unlock(&rs->count_lock);
 
         #ifdef BPF_DEBUG_PRINT
-        bpf_printk("!!! REQUEST %d COMPLETED WITH count %d, NOTIFYING CTRL SOCKET !!!", resp_msg->hdr.req_id, *pk_count);
+        bpf_printk("!!! REQUEST %d COMPLETED WITH COUNT %d, NOTIFYING CTRL SOCKET !!!", resp_msg->hdr.req_id, *pk_count);
         #endif
 
         __u16* ctrl_sk_port = bpf_map_lookup_elem(&map_gather_ctrl_port, &ZERO_IDX);
@@ -559,13 +508,33 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         if (!agg_entry)
             return TC_ACT_SHOT;
 
+        #ifdef BPF_DEBUG_PRINT
         bpf_printk("!!! Final agg value in kernel = %d !!!", agg_entry->data[300]);
+        #endif
 
         // Note: spinlock not needed for reading the aggregated data because 
         // at this point, any redundant packet trying to update the aggregated 
         // response is dropped prior to the aggregation logic
-        bpf_skb_store_bytes(skb, SG_MSG_BODY_OFF, (char*)agg_entry->data, sizeof(RESP_VECTOR_TYPE) * RESP_MAX_VECTOR_SIZE, BPF_F_RECOMPUTE_CSUM);
+
+        // this might be the issue .... if any trailing but legal packet (unlucky scheduling)
+        // if still adding their part, this is a race!!
+        // to perform the copy, we need some scratch pad data (in a per-cpu array)
+        // this still doesn't fix the data mismatch... idk
+        struct tmp_data* td = bpf_map_lookup_elem(&map_tmp_data, &ZERO_IDX);
+        if (!td)
+            return TC_ACT_SHOT;
+
+        bpf_spin_lock(&agg_entry->lock);
+        for (__u32 i = 0; i < RESP_MAX_VECTOR_SIZE; ++i) {
+            td->data[i] = agg_entry->data[i];
+        }
+        bpf_spin_unlock(&agg_entry->lock);
+        bpf_skb_store_bytes(skb, SG_MSG_BODY_OFF, (char*)td->data, sizeof(RESP_VECTOR_TYPE) * RESP_MAX_VECTOR_SIZE, 0);
         bpf_skb_store_bytes(skb, UDP_DEST_OFF, ctrl_sk_port, sizeof(*ctrl_sk_port), BPF_F_RECOMPUTE_CSUM);
+
+        // for (__u32 i = 0; i < RESP_MAX_VECTOR_SIZE; i += 5) {
+        //     bpf_printk("data[%d] = %d", i, td->data[i]);
+        // }
 
         // Reset the aggregated vector from this request
         #ifdef BPF_DEBUG_PRINT
@@ -574,7 +543,9 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         
         // NOTE: alternatively, we could consider a lazy cleanup: cleanup the resources
         // for a request when a new request is launched and is meant to take the old request's place
-        reset_aggregated_vector(agg_entry->data);
+        bpf_spin_lock(&agg_entry->lock);
+        clear_vector(agg_entry->data);
+        bpf_spin_unlock(&agg_entry->lock);
     } else {
         bpf_spin_unlock(&rs->count_lock);
     }

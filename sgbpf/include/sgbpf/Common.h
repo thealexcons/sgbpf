@@ -30,13 +30,6 @@ typedef struct worker_info {
 typedef enum sg_msg_flags 
 {
     SG_MSG_F_EMPTY       = 0,       
-
-    // Egress configuration flags for the completion policy flags (set in the initial egress scatter message)
-    SG_MSG_F_WAIT_ALL    = 1 << 0,  // The number of workers to wait for is given by the num_pks in the egress scatter msg
-    SG_MSG_F_WAIT_ANY    = 1 << 1,
-    SG_MSG_F_WAIT_N      = 1 << 2,  // The value of N is given by the num_pks in the egress scatter msg (to avoid syscalls)
-
-    // Ingress metadata flags (non-overlapping with egress flags)
     SG_MSG_F_PROCESSED,     // The packet has been processed by the gather program
     SG_MSG_F_LAST_CLONED,   // The last packet of the request, which is cloned
     

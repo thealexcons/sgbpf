@@ -14,9 +14,9 @@ namespace sgbpf
 
 enum class GatherCompletionPolicy 
 {
-    WaitAll = SG_MSG_F_WAIT_ALL,
-    WaitAny = SG_MSG_F_WAIT_ANY,
-    WaitN   = SG_MSG_F_WAIT_N
+    WaitAll,
+    WaitAny,
+    WaitN,
 };
 
 class ReqParams {

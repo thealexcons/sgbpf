@@ -24,6 +24,9 @@ int aggregation_prog(struct xdp_md* xdp_ctx) {
 
     // ITEM LIST (IN ORDER OF PRIORITY):
 
+    // FIX MISSING PACKETS FOR N < WORKERS.SIZE()
+    // IO_URING DOES NOT SEEM TO BE GETTING ALL THE PACKETS FROM EBPF???
+
     // LOOK INTO PER SOCKET STORAGE FOR THE FUTURE WORK SECTION
 
     // bpf prog: (note these have ASan on, can't get rid of it)
@@ -39,10 +42,6 @@ int aggregation_prog(struct xdp_md* xdp_ctx) {
     // very similar measurements. is this because of ASan?
 
     // TODO: Unify aggregation types for VECTOR and SCALAR data (in common.h)
-    //  4. consider ebpf prog vs regular func call for custom aggregation logic
-    //      in terms of performance, ease of use, etc.
-
-    // FIX RACE CONDITION FOR COUNT ATOMICS
 
     // two options:
     //   things to cleanup: reset aggregated value, count, 

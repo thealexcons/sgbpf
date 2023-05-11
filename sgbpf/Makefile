@@ -10,7 +10,7 @@ OUTPUTFILE := libsgbpf.a
 INC_DIR := ./include/sgbpf
 LIBBPF_INC := ../libbpf/src/root/usr/include/
 LIBBPF_SRC := ../libbpf/src/
-CFLAGS= -std=c++17 -O2 -g -Wall -I$(INC_DIR) -I$(LIBBPF_INC) -L$(LIBBPF_SRC)
+CFLAGS= -std=c++17 -O2 -g -Wall -I$(INC_DIR) -I$(LIBBPF_INC) -L$(LIBBPF_SRC) -D DEBUG_PRINT
 
 SRC_DIR := ./src
 OBJ_DIR := ./obj
@@ -56,7 +56,7 @@ __check_defined_set_default = \
       $(info Undefined $1$(if $2, ($2)), setting to default $(BPF_OBJ_DIR) path) \
 	  $(eval export OUTPUT_BPF_OBJ_DIR := $(BPF_OBJ_DIR)))
 
-.SILENT: bpf
+.SILENT: bpf bpf_func
 
 .ONESHELL:
 bpf: $(SRC_DIR)/bpf/scatter_gather.bpf.c
@@ -74,7 +74,7 @@ bpf: $(SRC_DIR)/bpf/scatter_gather.bpf.c
 
 	# Build custom aggregation BPF object file
 	echo "[2/2] Building custom aggregation eBPF program..."
-	clang-12 -target bpf -I$(INC_DIR) -D __BPF_TRACING__ -D BPF_DEBUG_PRINT -g -O2 -c ${CUSTOM_AGGREGATION_BPF_PROG} -o $(AGGREGATION_BPF_PROG) || exit
+	clang-12 -target bpf -I$(INC_DIR) -D __BPF_TRACING__ -g -O2 -c ${CUSTOM_AGGREGATION_BPF_PROG} -o $(AGGREGATION_BPF_PROG) || exit
 	mv $(AGGREGATION_BPF_PROG) ${OUTPUT_BPF_OBJ_DIR}
 	echo "[2/2] Built custom aggregation eBPF program and placed under ${OUTPUT_BPF_OBJ_DIR}\n"
 	echo "BPF OBJECT FILES BUILT"

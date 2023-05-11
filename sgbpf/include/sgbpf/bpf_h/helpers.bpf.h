@@ -24,6 +24,10 @@
 #define UNLIKELY(cond) __builtin_expect ((cond), 0)
 #define LIKELY(cond) __builtin_expect ((cond), 1)
 
+#define CHECK_MAP_LOOKUP(ptr, ret) \
+    if (UNLIKELY(!ptr)) \
+        return ret;
+
 static inline enum xdp_action parse_msg_xdp(struct xdp_md* ctx, sg_msg_t** msg) {
     void* data = (void *)(long)ctx->data;
     void* data_end = (void *)(long)ctx->data_end;
@@ -32,27 +36,20 @@ static inline enum xdp_action parse_msg_xdp(struct xdp_md* ctx, sg_msg_t** msg) 
     struct udphdr* udph;
     
     ethh = (struct ethhdr*)data;
-    if ((void *)(ethh + 1) > data_end)
-        return XDP_DROP;
-    if (ethh->h_proto != bpf_htons(ETH_P_IP))
+    if (UNLIKELY( (void *)(ethh + 1) > data_end || ethh->h_proto != bpf_htons(ETH_P_IP) ))
         return XDP_DROP;
     
     iph = (struct iphdr *)(ethh + 1);
-    if ((void *)(iph + 1) > data_end)
-        return XDP_DROP;
-    if (iph->protocol != IPPROTO_UDP)
+    if (UNLIKELY( (void *)(iph + 1) > data_end || iph->protocol != IPPROTO_UDP ))
         return XDP_DROP;
     
     udph = (struct udphdr*)(iph + 1);
-    if ((void *)(udph + 1) > data_end)
+    if (UNLIKELY( (void *)(udph + 1) > data_end ))
         return XDP_DROP;
     
     __u32 payload_size = bpf_ntohs(udph->len) - sizeof(struct udphdr);
-    if (payload_size != sizeof(sg_msg_t))
-        return XDP_DROP;
-    
     char* payload = (char*) udph + sizeof(struct udphdr);
-    if ((void*) payload + payload_size > data_end)
+    if (UNLIKELY( payload_size != sizeof(sg_msg_t) || (void*) payload + payload_size > data_end ))
         return XDP_DROP;
 
     *msg = (sg_msg_t*) payload;
@@ -86,8 +83,7 @@ struct aggregation_prog_ctx {
     __u32 slot = GET_REQ_MAP_SLOT(ctx.pk_msg->hdr.req_id); \
     /* static __u32 ZERO_IDX = 0;*/ \
     struct aggregation_entry* agg_entry = bpf_map_lookup_elem(&map_aggregated_response, &slot); \
-    if (!agg_entry) \
-        return XDP_ABORTED; \
+    CHECK_MAP_LOOKUP(agg_entry, XDP_ABORTED); \
     ctx.current_value = agg_entry->data; \
     ctx.lock = &agg_entry->lock; \
     __u32* pk_count = (void*)(unsigned long) xdp_ctx->data_meta; \

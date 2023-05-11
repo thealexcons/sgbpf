@@ -87,7 +87,7 @@ static __always_inline void clear_vector(RESP_VECTOR_TYPE* agg_vector) {
 static inline int handle_clean_req_msg(char* payload, __u32 payload_size, void* data_end) {
 
     sg_clean_req_msg_t* clean_msg = (sg_clean_req_msg_t*) payload;
-    if (clean_msg->magic != SG_CLEAN_REQ_MSG_MAGIC)
+    if (UNLIKELY( clean_msg->magic != SG_CLEAN_REQ_MSG_MAGIC ))
         return TC_ACT_OK;
 
     __u32 slot = GET_REQ_MAP_SLOT(clean_msg->req_id);
@@ -96,8 +96,7 @@ static inline int handle_clean_req_msg(char* payload, __u32 payload_size, void* 
     
     // reset the stale count
     struct req_state* rs = bpf_map_lookup_elem(&map_req_state, &slot);
-    if (!rs)
-        return XDP_ABORTED;
+    CHECK_MAP_LOOKUP(rs, XDP_ABORTED);
 
     bpf_spin_lock(&rs->count_lock); // probably not needed, as it won't be under contention
     rs->count = 0;
@@ -106,8 +105,8 @@ static inline int handle_clean_req_msg(char* payload, __u32 payload_size, void* 
 
     // reset the stale aggregated data
     struct aggregation_entry* agg_entry = bpf_map_lookup_elem(&map_aggregated_response, &slot);
-    if (!agg_entry)
-        return TC_ACT_SHOT;
+    CHECK_MAP_LOOKUP(agg_entry, TC_ACT_SHOT);
+    
     bpf_spin_lock(&agg_entry->lock);
     clear_vector(agg_entry->data);
     bpf_spin_unlock(&agg_entry->lock);
@@ -157,10 +156,8 @@ int scatter_prog(struct __sk_buff* skb) {
     // TODO Maybe there's a better way to intercept traffic from a particular socket
     // look into BPF_MAP_TYPE_SK_STORAGE
     // see example code Marios sent in email (email subject: Modifying SKB header fields to clone packet)
-    uint16_t* local_application_port; // in network byte order already
-    local_application_port = bpf_map_lookup_elem(&map_application_port, &ZERO_IDX);
-    if (!local_application_port)
-        return TC_ACT_OK;
+    uint16_t* local_application_port = bpf_map_lookup_elem(&map_application_port, &ZERO_IDX); // in network byte order
+    CHECK_MAP_LOOKUP(local_application_port, TC_ACT_OK);
 
     // the scatter request is sent to "self", so have this check here
     if (udph->dest == udph->source && udph->source == *local_application_port) {
@@ -177,14 +174,14 @@ int scatter_prog(struct __sk_buff* skb) {
             return TC_ACT_OK;
         }
 
-        if (((void*) payload + payload_size > data_end)) {
+        if (UNLIKELY( (void*) payload + payload_size > data_end )) {
             // data_end - data = MTU size + ETH_HDR (14 bytes)
             bpf_printk("Invalid packet size: payload might be larger than MTU?");
             return TC_ACT_OK;
         }
 
         sg_msg_t* sgh = (sg_msg_t*) payload; 
-        if (sgh->hdr.msg_type != SCATTER_MSG)
+        if (UNLIKELY( sgh->hdr.msg_type != SCATTER_MSG ))
             return TC_ACT_OK;
 
         __u32 slot = GET_REQ_MAP_SLOT(sgh->hdr.req_id);
@@ -198,8 +195,8 @@ int scatter_prog(struct __sk_buff* skb) {
 
         // Reset count (NOTE: this must go here, NOT in the ctrl sk notification)
         struct req_state* rs = bpf_map_lookup_elem(&map_req_state, &slot);
-        if (!rs)
-            return TC_ACT_SHOT;
+        CHECK_MAP_LOOKUP(rs, TC_ACT_SHOT);
+
         bpf_spin_lock(&rs->count_lock);
         rs->count = 0;
         // rs->complete = 0;
@@ -274,6 +271,8 @@ int gather_prog(struct xdp_md* ctx) {
 	struct iphdr* iph;
     struct udphdr* udph;
 
+    // note to self: don't use UNLIKELY here because this is dealing
+    // with global network traffic
 	ethh = data;
 	if ((void *)(ethh + 1) > data_end)
 		return XDP_PASS;
@@ -303,24 +302,15 @@ int gather_prog(struct xdp_md* ctx) {
 
     // we only check that the worker is valid, we don't check for duplicates now
     worker_resp_status_t* status = bpf_map_lookup_elem(&map_workers_resp_status, &worker);
-    if (!status) {
-        return XDP_PASS;
-    }
+    CHECK_MAP_LOOKUP(status, XDP_PASS);
 
     __u32 payload_size = bpf_ntohs(udph->len) - sizeof(struct udphdr);
-
-    // Note: this equality is needed so that the comparison size is known
-    // at compile-time for the loop unrolling.
-    if (payload_size != sizeof(sg_msg_t))
-        return XDP_DROP;
-
     char* payload = (char*) udph + sizeof(struct udphdr);
-    if ((void*) payload + payload_size > data_end)
+    if (UNLIKELY( payload_size != sizeof(sg_msg_t) || (void*) payload + payload_size > data_end ))
         return XDP_DROP;
-
 
     sg_msg_t* resp_msg = (sg_msg_t*) payload;
-    if (resp_msg->hdr.msg_type != GATHER_MSG)
+    if (UNLIKELY( resp_msg->hdr.msg_type != GATHER_MSG ))
         return XDP_DROP;
 
     // If this is a multi-packet message, forward the packet without aggregation
@@ -349,8 +339,7 @@ int gather_prog(struct xdp_md* ctx) {
     __u32 slot = GET_REQ_MAP_SLOT(resp_msg->hdr.req_id);
     
     struct req_state* rs = bpf_map_lookup_elem(&map_req_state, &slot);
-    if (!rs)
-        return XDP_ABORTED;
+    CHECK_MAP_LOOKUP(rs, XDP_ABORTED);
 
     // THE ISSUE IS THAT ONCE TWO PACKETS ARE PAST THIS CHECK,
     // BOTH PACKETS WILL PERFORM AGGREGATION BUT ONLY ONE WILL BE SUCCESSFUL
@@ -381,7 +370,7 @@ int gather_prog(struct xdp_md* ctx) {
     void* data_updated = (void*)(unsigned long) ctx->data;
     __u32* pk_count_meta;
     pk_count_meta = (void*)(unsigned long) ctx->data_meta;
-    if (pk_count_meta + 1 > data_updated)
+    if (UNLIKELY( pk_count_meta + 1 > data_updated ))
         return XDP_ABORTED;
     *pk_count_meta = (__u32) pk_count;
 
@@ -462,8 +451,7 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
     }
 
     struct req_state* rs = bpf_map_lookup_elem(&map_req_state, &slot);
-    if (!rs)
-        return TC_ACT_SHOT;
+    CHECK_MAP_LOOKUP(rs, TC_ACT_SHOT);
 
     // Check completion satisfied and this is indeed the last required packet
     bpf_spin_lock(&rs->count_lock);
@@ -475,8 +463,7 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         #endif
 
         __u16* ctrl_sk_port = bpf_map_lookup_elem(&map_gather_ctrl_port, &ZERO_IDX);
-        if (!ctrl_sk_port)
-            return TC_ACT_SHOT;
+        CHECK_MAP_LOOKUP(ctrl_sk_port, TC_ACT_SHOT);
         
         // Forward the final packet as usual, but mark it as cloned to avoid duplicate aggregation
         static const unsigned char cloned_flag = SG_MSG_F_LAST_CLONED;
@@ -485,8 +472,7 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
 
         // Notify the ctrl socket with the aggregated response in the packet body
         struct aggregation_entry* agg_entry = bpf_map_lookup_elem(&map_aggregated_response, &slot);
-        if (!agg_entry)
-            return TC_ACT_SHOT;
+        CHECK_MAP_LOOKUP(agg_entry, TC_ACT_SHOT);
 
         #ifdef BPF_DEBUG_PRINT
         bpf_printk("!!! Final agg value in kernel = %d !!!", agg_entry->data[300]);
@@ -502,9 +488,8 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         // to perform the copy, we need some scratch pad data (in a per-cpu array)
         // this still doesn't fix the data mismatch... idk
         struct tmp_data* td = bpf_map_lookup_elem(&map_tmp_data, &ZERO_IDX);
-        if (!td)
-            return TC_ACT_SHOT;
-
+        CHECK_MAP_LOOKUP(td, TC_ACT_SHOT);
+        
         bpf_spin_lock(&agg_entry->lock);
         for (__u32 i = 0; i < RESP_MAX_VECTOR_SIZE; ++i) {
             td->data[i] = agg_entry->data[i];

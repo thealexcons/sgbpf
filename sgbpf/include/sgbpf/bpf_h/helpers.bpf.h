@@ -59,11 +59,13 @@ static inline enum xdp_action parse_msg_xdp(struct xdp_md* ctx, sg_msg_t** msg) 
 static __always_inline enum xdp_action post_aggregation_process(struct xdp_md* ctx, sg_msg_t* resp_msg) {
     // Set the flag in the payload for the upper layer programs
     resp_msg->hdr.flags = SG_MSG_F_PROCESSED;
+    #ifdef DEBUG_PRINT
     __u32* pk_count = (void*)(unsigned long) ctx->data_meta;
     if (pk_count + 1 > (void*)(unsigned long) ctx->data) {
         return XDP_ABORTED; \
     }
-    bpf_printk("done aggregation with pk %d", *pk_count);
+    bpf_printk("Finished aggregation with pk %d", *pk_count);
+    #endif
     return XDP_PASS;
 }
 
@@ -81,16 +83,10 @@ struct aggregation_prog_ctx {
     if ((act = parse_msg_xdp(xdp_ctx, &ctx.pk_msg)) != XDP_PASS) \
         return act; \
     __u32 slot = GET_REQ_MAP_SLOT(ctx.pk_msg->hdr.req_id); \
-    /* static __u32 ZERO_IDX = 0;*/ \
     struct aggregation_entry* agg_entry = bpf_map_lookup_elem(&map_aggregated_response, &slot); \
     CHECK_MAP_LOOKUP(agg_entry, XDP_ABORTED); \
     ctx.current_value = agg_entry->data; \
     ctx.lock = &agg_entry->lock; \
-    __u32* pk_count = (void*)(unsigned long) xdp_ctx->data_meta; \
-    if (pk_count + 1 > (void*)(unsigned long) xdp_ctx->data) { \
-        return XDP_ABORTED; \
-    } \
-    bpf_printk("starting aggregation with pk %d", *pk_count); \
     bpf_spin_lock(ctx.lock); \
 }
 

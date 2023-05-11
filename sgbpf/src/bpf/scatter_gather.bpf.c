@@ -14,9 +14,6 @@
 #include "bpf_h/maps.bpf.h"
 
 
-static const __u32 ZERO_IDX = 0;
-
-
 // Offsets for specific fields in the packets
 #define IP_DEST_OFF (ETH_HLEN + offsetof(struct iphdr, daddr))
 #define UDP_DEST_OFF (ETH_HLEN + sizeof(struct iphdr) + offsetof(struct udphdr, dest))
@@ -159,7 +156,8 @@ int scatter_prog(struct __sk_buff* skb) {
     // TODO Maybe there's a better way to intercept traffic from a particular socket
     // look into BPF_MAP_TYPE_SK_STORAGE
     // see example code Marios sent in email (email subject: Modifying SKB header fields to clone packet)
-    uint16_t* local_application_port = bpf_map_lookup_elem(&map_application_port, &ZERO_IDX); // in network byte order
+    const __u32 zero = 0;
+    uint16_t* local_application_port = bpf_map_lookup_elem(&map_application_port, &zero); // in network byte order
     CHECK_MAP_LOOKUP(local_application_port, TC_ACT_OK);
 
     // the scatter request is sent to "self", so have this check here
@@ -392,12 +390,12 @@ int gather_prog(struct xdp_md* ctx) {
     bpf_printk("Got packet with payload = %d for req ID = %d and seq num = %d", resp, resp_msg->hdr.req_id, resp_msg->hdr.seq_num);
 
     // Aggregate the value
-    RESP_AGGREGATION_TYPE* agg_resp = bpf_map_lookup_elem(&map_aggregated_response, &ZERO_IDX);
+    RESP_AGGREGATION_TYPE* agg_resp = bpf_map_lookup_elem(&map_aggregated_response, &slot);
     if (!agg_resp)
         return XDP_ABORTED;
 
     const __u32 updated_resp = *agg_resp + resp;
-    bpf_map_update_elem(&map_aggregated_response, &ZERO_IDX, &updated_resp, 0);
+    bpf_map_update_elem(&map_aggregated_response, &slot, &updated_resp, 0);
 
 */
 }
@@ -460,7 +458,8 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         bpf_printk("!!! REQUEST %d COMPLETED WITH COUNT %d, NOTIFYING CTRL SOCKET !!!", resp_msg->hdr.req_id, *pk_count);
         #endif
 
-        __u16* ctrl_sk_port = bpf_map_lookup_elem(&map_gather_ctrl_port, &ZERO_IDX);
+        const __u32 zero = 0;
+        __u16* ctrl_sk_port = bpf_map_lookup_elem(&map_gather_ctrl_port, &zero);
         CHECK_MAP_LOOKUP(ctrl_sk_port, TC_ACT_SHOT);
         
         // Forward the final packet as usual, but mark it as cloned to avoid duplicate aggregation
@@ -485,7 +484,7 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         // if still adding their part, this is a race!!
         // to perform the copy, we need some scratch pad data (in a per-cpu array)
         // this still doesn't fix the data mismatch... idk
-        struct tmp_data* td = bpf_map_lookup_elem(&map_tmp_data, &ZERO_IDX);
+        struct tmp_data* td = bpf_map_lookup_elem(&map_tmp_data, &zero);
         CHECK_MAP_LOOKUP(td, TC_ACT_SHOT);
 
         bpf_spin_lock(&agg_entry->lock);

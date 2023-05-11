@@ -14,10 +14,6 @@
 #include "bpf_h/maps.bpf.h"
 
 
-#ifdef CUSTOM_AGGREGATION_FUNC
-#include "bpf_h/custom_aggregation_function.bpf.h"
-#endif // CUSTOM_AGGREGATION_FUNC
-
 static const __u32 ZERO_IDX = 0;
 
 
@@ -389,31 +385,15 @@ int gather_prog(struct xdp_md* ctx) {
         return XDP_ABORTED;
     *pk_count_meta = (__u32) pk_count;
 
-    // DISCUSS: for performance, maybe just treat it as a function instead
-    // of a full program change to avoid overhead of re-parsing packet
-    // as a raw function call, this works
 
-#ifndef CUSTOM_AGGREGATION_FUNC
+    // Since reparsing of the packet is needed after modfying the metadata,
+    // calling a regular C function does not provide any extra performance benefits.
+
     // Standard method: use BPF program defined in separate object file
     bpf_tail_call(ctx, &map_aggregation_progs, CUSTOM_AGGREGATION_PROG);
     return XDP_PASS;
-#else
-    // REPARSING NEEDED.... therefore, custom header file is probably useless
 
-    // Alternative method: use regular function call defined in supplied header file
-    struct aggregation_entry* agg_entry = bpf_map_lookup_elem(&map_aggregated_response, &slot);
-    if (!agg_entry)
-        return XDP_ABORTED;
-
-    bpf_spin_lock(&agg_entry->lock);
-    enum xdp_action act = aggregate(resp_msg, agg_entry->data);
-    bpf_spin_unlock(&agg_entry->lock);
-    if (act != XDP_PASS)
-        return act;
-    return post_aggregation_process(ctx, resp_msg);
-#endif // CUSTOM_AGGREGATION_FUNC
-
-/*
+/*  SCALAR AGGREGATION EXAMPLE:
 
     // Get the int the worker responded with
     __u32 resp = bpf_ntohl(*((__u32 *) resp_msg->body));

@@ -103,6 +103,7 @@ struct aggregation_prog_ctx {
 }
 
 
+// bpf_ktime_get_ns() roughly takes 30-40 ns
 struct timer {
     const char* name;
     __u64       start_ns;
@@ -112,9 +113,9 @@ struct timer {
     __START_TIMER_timer.name = prog_name; \
     __START_TIMER_timer.start_ns = bpf_ktime_get_ns();
 
-#define END_TIMER() { \
+#define MEASURE_ELAPSED_TIME(checkpoint_name) { \
     __u64 time_ns = bpf_ktime_get_ns() - __START_TIMER_timer.start_ns; \
-    bpf_printk("Elapsed time for '%s': %d ns (%d us)", __START_TIMER_timer.name, time_ns, time_ns / 1000); \
+    bpf_printk("Elapsed time for '_%s': %d ns (%d us)", checkpoint_name, time_ns, time_ns / 1000); \
 }
 
 #endif // HELPERS_BPF_H

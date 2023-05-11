@@ -32,14 +32,6 @@ AGGREGATION_BPF_PROG := aggregation.bpf.o
 
 BPF_OBJ_DIR := ./bpfobj
 
-# The aggregation object should be compiled on the demand by the user
-# They can do something like:
-# make --directory=<path/to/sgbpf> aggregation
-
-#note if using the custom function instead of program, we need add it to the -I of the compilation
-# and enable the -D CUSTOM_AGGREGATION flag
-# hence the bpf target should be called on demand, and not on installation
-
 # Helper functions to check for environment variables
 check_defined_err = \
     $(strip $(foreach 1,$1, \
@@ -68,7 +60,7 @@ bpf: $(SRC_DIR)/bpf/scatter_gather.bpf.c
 
 	# Build main BPF object file
 	echo "[1/2] Building main eBPF object file..."
-	clang-12 -target bpf -emit-llvm -S -I$(INC_DIR) -D __BPF_TRACING__ -D BPF_DEBUG_PRINT -g -O2 -c $^ -o $(BPF_PROG).ll || exit
+	clang-12 -target bpf -emit-llvm -S -I$(INC_DIR) -D __BPF_TRACING__ -g -O2 -c $^ -o $(BPF_PROG).ll || exit
 	llc-12 -march=bpf -filetype=obj -o $(BPF_PROG) $(BPF_PROG).ll
 	rm -f $(BPF_PROG).ll
 	mv $(BPF_PROG) ${OUTPUT_BPF_OBJ_DIR}
@@ -82,11 +74,6 @@ bpf: $(SRC_DIR)/bpf/scatter_gather.bpf.c
 	mv $(AGGREGATION_BPF_PROG) ${OUTPUT_BPF_OBJ_DIR}
 	echo "[2/2] Built custom aggregation eBPF program and placed under ${OUTPUT_BPF_OBJ_DIR}\n"
 	echo "BPF OBJECT FILES BUILT"
-
-# TODO use two step compilation, might be better? everyone seems to use it this way
-# clang-12 -target bpf -emit-llvm -S -D __BPF_TRACING__ -I$(LIBBPF_HEADERS) -g -Wall -O2 -c $^ -o $@.ll
-# llc-12 -march=bpf -filetype=obj -o $@ $@.ll
-
 
 .PHONY: all
 all: $(OUTPUTFILE)

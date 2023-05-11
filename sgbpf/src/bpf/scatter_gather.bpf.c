@@ -90,10 +90,12 @@ static inline int handle_clean_req_msg(char* payload, __u32 payload_size, void* 
     if (UNLIKELY( clean_msg->magic != SG_CLEAN_REQ_MSG_MAGIC ))
         return TC_ACT_OK;
 
+    #ifdef DEBUG_PRINT
+    bpf_printk("Got cleanup msg for req id %d (with slot %d)", clean_msg->req_id, slot);
+    #endif
+    
     __u32 slot = GET_REQ_MAP_SLOT(clean_msg->req_id);
 
-    bpf_printk("Got cleanup msg for req id %d (with slot %d)", clean_msg->req_id, slot);
-    
     // reset the stale count
     struct req_state* rs = bpf_map_lookup_elem(&map_req_state, &slot);
     CHECK_MAP_LOOKUP(rs, XDP_ABORTED);
@@ -114,10 +116,11 @@ static inline int handle_clean_req_msg(char* payload, __u32 payload_size, void* 
     return TC_ACT_SHOT;
 }
 
+
 SEC("tc")
 int scatter_prog(struct __sk_buff* skb) {
-    // START_TIMER("scatter_prog");
-	
+    // START_TIMER("scatter_prog"); // hot path takes around 10 to 20 us
+
     void* data = (void *)(long)skb->data;
 	void* data_end = (void *)(long)skb->data_end;
 	struct ethhdr* ethh;
@@ -187,11 +190,10 @@ int scatter_prog(struct __sk_buff* skb) {
         __u32 slot = GET_REQ_MAP_SLOT(sgh->hdr.req_id);
 
         // Configure request settings from the provided flags (completion policy)
-        bpf_printk("======================NEW REQ %d==============================", sgh->hdr.req_id);
+        // bpf_printk("======================NEW REQ %d==============================", sgh->hdr.req_id);
         #ifdef BPF_DEBUG_PRINT
         bpf_printk("Got SCATTER request");
         #endif
-
 
         // Reset count (NOTE: this must go here, NOT in the ctrl sk notification)
         struct req_state* rs = bpf_map_lookup_elem(&map_req_state, &slot);
@@ -213,8 +215,6 @@ int scatter_prog(struct __sk_buff* skb) {
             .skb = skb,
         };
         bpf_for_each_map_elem(&map_workers, send_worker, &data, 0);
-
-        // END_TIMER();
 
 #ifdef BPF_DEBUG_PRINT
         bpf_printk("Finished SCATTER request");
@@ -377,9 +377,12 @@ int gather_prog(struct xdp_md* ctx) {
 
     // Since reparsing of the packet is needed after modfying the metadata,
     // calling a regular C function does not provide any extra performance benefits.
+    // Mention in report that both approaches mentioned and that microbenchmarks
+    // reveal performance is exactly the same, so opt for the easier to use option.
+    // Microbenchmarks show the reparsing the packet (ptr bounds check take around 20 ns)
 
     // Standard method: use BPF program defined in separate object file
-    bpf_tail_call(ctx, &map_aggregation_progs, CUSTOM_AGGREGATION_PROG);
+    bpf_tail_call(ctx, &map_aggregation_progs, CUSTOM_AGGREGATION_PROG); // aggregation prog takes around 1 us only
     return XDP_PASS;
 
 /*  SCALAR AGGREGATION EXAMPLE:
@@ -401,6 +404,8 @@ int gather_prog(struct xdp_md* ctx) {
 
 SEC("tc")
 int notify_gather_ctrl_prog(struct __sk_buff* skb) {
+    // START_TIMER(""); // hot path takes around 3 to 5 us
+
 	void* data = (void *)(long)skb->data;
 	void* data_end = (void *)(long)skb->data_end;
 	struct ethhdr* ethh;
@@ -415,23 +420,16 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
 		return TC_ACT_OK;
 
 	iph = (struct iphdr *)(ethh + 1);
-	if ((void *)(iph + 1) > data_end)
+	if ((void *)(iph + 1) > data_end || iph->protocol != IPPROTO_UDP)
 		return TC_ACT_OK;
-
-    if (iph->protocol != IPPROTO_UDP)
-        return TC_ACT_OK;
 
     udph = (struct udphdr*)(iph + 1);
     if ((void *)(udph + 1) > data_end)
         return TC_ACT_OK;
 
-
     __u32 payload_size = bpf_ntohs(udph->len) - sizeof(struct udphdr);
-    if (payload_size != sizeof(sg_msg_t))
-        return TC_ACT_OK;
-
     char* payload = (char*) udph + sizeof(struct udphdr);
-    if ((void*) payload + payload_size > data_end)
+    if (payload_size != sizeof(sg_msg_t) || (void*) payload + payload_size > data_end)
         return TC_ACT_OK;
 
     sg_msg_t* resp_msg = (sg_msg_t*) payload;
@@ -466,7 +464,7 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         CHECK_MAP_LOOKUP(ctrl_sk_port, TC_ACT_SHOT);
         
         // Forward the final packet as usual, but mark it as cloned to avoid duplicate aggregation
-        static const unsigned char cloned_flag = SG_MSG_F_LAST_CLONED;
+        const unsigned char cloned_flag = SG_MSG_F_LAST_CLONED;
         bpf_skb_store_bytes(skb, SG_MSG_FLAGS_OFF, &cloned_flag, sizeof(unsigned char), BPF_F_RECOMPUTE_CSUM);
         bpf_clone_redirect(skb, skb->ifindex, 0);
 
@@ -489,30 +487,18 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         // this still doesn't fix the data mismatch... idk
         struct tmp_data* td = bpf_map_lookup_elem(&map_tmp_data, &ZERO_IDX);
         CHECK_MAP_LOOKUP(td, TC_ACT_SHOT);
-        
+
         bpf_spin_lock(&agg_entry->lock);
+        #pragma clang loop unroll(full)
         for (__u32 i = 0; i < RESP_MAX_VECTOR_SIZE; ++i) {
-            td->data[i] = agg_entry->data[i];
+            td->data[i] = agg_entry->data[i];   // copy vector to cpu-local memory
+            agg_entry->data[i] = 0;             // clear vector contents
         }
         bpf_spin_unlock(&agg_entry->lock);
         bpf_skb_store_bytes(skb, SG_MSG_BODY_OFF, (char*)td->data, sizeof(RESP_VECTOR_TYPE) * RESP_MAX_VECTOR_SIZE, 0);
         bpf_skb_store_bytes(skb, UDP_DEST_OFF, ctrl_sk_port, sizeof(*ctrl_sk_port), BPF_F_RECOMPUTE_CSUM);
-
-        // for (__u32 i = 0; i < RESP_MAX_VECTOR_SIZE; i += 5) {
-        //     bpf_printk("data[%d] = %d", i, td->data[i]);
-        // }
-
-        // Reset the aggregated vector from this request
-        #ifdef BPF_DEBUG_PRINT
-        bpf_printk("reset aggregation to 0");
-        #endif
-        
-        // NOTE: alternatively, we could consider a lazy cleanup: cleanup the resources
-        // for a request when a new request is launched and is meant to take the old request's place
-        bpf_spin_lock(&agg_entry->lock);
-        clear_vector(agg_entry->data);
-        bpf_spin_unlock(&agg_entry->lock);
-    } else {
+    } 
+    else {
         bpf_spin_unlock(&rs->count_lock);
     }
     return TC_ACT_OK;

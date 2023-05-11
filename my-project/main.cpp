@@ -71,21 +71,7 @@ int main(int argc, char** argv) {
     // Standard method (BPF program)
     // export CUSTOM_AGGREGATION_BPF_PROG=$(pwd)/custom_aggregation.bpf.c
     // Using make --directory=../sgbpf bpf
-    sgbpf::ContextParams ctxParams;
-    ctxParams.bpfObjsPath = argv[1];
-    ctxParams.customAggregationMode = sgbpf::AggregationMode::Program;
-    ctxParams.ifname = argv[2];
-    sgbpf::Context ctx{ctxParams};
-
-    // Using the alternative method (regular C function for custom aggregation)
-    // export CUSTOM_AGGREGATION_FUNCTION=$(pwd)/custom_agg_func.bpf.h
-    // Using make --directory=../sgbpf bpf_func
-    // USELESS
-    // sgbpf::ContextParams ctxParams;
-    // ctxParams.bpfObjsPath = argv[1];
-    // ctxParams.customAggregationMode = sgbpf::AggregationMode::Function;
-    // ctxParams.ifname = argv[2];
-    // sgbpf::Context ctx{ctxParams};
+    sgbpf::Context ctx{argv[1], argv[2]};
 
     auto workers = sgbpf::Worker::fromFile("workers.cfg");
     sgbpf::Service service{ctx, workers};

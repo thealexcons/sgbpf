@@ -5,14 +5,10 @@ namespace sgbpf
 
 namespace fs = std::filesystem;
 
-Context::Context(const ContextParams& params)
-    : d_object{(fs::path(params.bpfObjsPath) / fs::path(MAIN_SG_BPF_OBJ_NAME)).c_str()}
-    , d_aggregationProgObject{
-        params.customAggregationMode == AggregationMode::Program ? 
-            (fs::path(params.bpfObjsPath) / fs::path(AGGREGATION_BPF_OBJ_NAME)).c_str()
-            : "" 
-      }
-    , d_ifindex{::if_nametoindex(params.ifname)}
+Context::Context(const char* bpfObjectsPath, const char* interfaceName)
+    : d_object{(fs::path(bpfObjectsPath) / fs::path(MAIN_SG_BPF_OBJ_NAME)).c_str()}
+    , d_aggregationProgObject{(fs::path(bpfObjectsPath) / fs::path(AGGREGATION_BPF_OBJ_NAME)).c_str()}
+    , d_ifindex{::if_nametoindex(interfaceName)}
     , d_scatterProg{d_object.findProgramByName("scatter_prog").value()}
     , d_gatherNotifyProg{d_object.findProgramByName("notify_gather_ctrl_prog").value()}
     , d_gatherProg{d_object.findProgramByName("gather_prog").value()}
@@ -30,13 +26,11 @@ Context::Context(const ContextParams& params)
 
     d_gatherProgHandle = ebpf::XDPHook::attach(d_ifindex, d_gatherProg);
 
-    if (params.customAggregationMode == AggregationMode::Program) {
-        auto vecAggProgsMap = d_object.findMapByName("map_aggregation_progs").value();
-        auto progIdx = CUSTOM_AGGREGATION_PROG;
-        auto customAggregationProg = d_aggregationProgObject.findProgramByName("aggregation_prog").value();
-        auto customAggregationProgFd = customAggregationProg.fd();
-        vecAggProgsMap.update(&progIdx, &customAggregationProgFd);
-    }
+    auto vecAggProgsMap = d_object.findMapByName("map_aggregation_progs").value();
+    auto progIdx = CUSTOM_AGGREGATION_PROG;
+    auto customAggregationProg = d_aggregationProgObject.findProgramByName("aggregation_prog").value();
+    auto customAggregationProgFd = customAggregationProg.fd();
+    vecAggProgsMap.update(&progIdx, &customAggregationProgFd);
 }
 
 Context::~Context()

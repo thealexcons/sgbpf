@@ -79,22 +79,6 @@ bpf: $(SRC_DIR)/bpf/scatter_gather.bpf.c
 	echo "[2/2] Built custom aggregation eBPF program and placed under ${OUTPUT_BPF_OBJ_DIR}\n"
 	echo "BPF OBJECT FILES BUILT"
 
-.ONESHELL:
-bpf_func: $(SRC_DIR)/bpf/scatter_gather.bpf.c
-	$(call check_defined_err, CUSTOM_AGGREGATION_FUNCTION)
-	$(call check_defined_set_default, OUTPUT_BPF_OBJ_DIR)
-
-	mkdir -p $(BPF_OBJ_DIR)
-	mkdir -p ${OUTPUT_BPF_OBJ_DIR}
-
-	# Build main BPF object file with the custom aggregation function in supplied header file
-	echo "Building main eBPF object file with custom function..."
-	cp ${CUSTOM_AGGREGATION_FUNCTION} ${INC_DIR}/bpf_h/custom_aggregation_function.bpf.h
-	clang-12 -target bpf -I$(INC_DIR) -D __BPF_TRACING__ -D BPF_DEBUG_PRINT -D CUSTOM_AGGREGATION_FUNC -g -O2 -c $^ -o $(BPF_PROG) || exit
-	mv $(BPF_PROG) ${OUTPUT_BPF_OBJ_DIR}
-	echo "Built eBPF object file and placed under ${OUTPUT_BPF_OBJ_DIR}\n"
-
-
 .PHONY: all
 all: $(OUTPUTFILE)
 
@@ -103,4 +87,3 @@ clean:
 	rm -rf $(OBJ_DIR)
 	rm -rf $(BPF_OBJ_DIR)
 	rm -rf $(OUT_DIR)
-	rm -f $(INC_DIR)/bpf_h/custom_aggregation_function.bpf.h

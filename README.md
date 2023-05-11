@@ -63,9 +63,6 @@ the missed shared object to `lib/x86_64-linux-gnu` or update the `LD_LIBRARY_PAT
 
    4. Now, run `make --directory=<path/to/sgbpf> bpf` to build all required BPF object files.
 
-   5. Alternative method: using a regular C function instead of a full BPF XDP program is possible too. For this, you must set the env var `CUSTOM_AGGREGATION_FUNCTION` a FULL path to a header file (for example, `custom_agg_func.bpf.h`). This file must contain a function with the following signature: `static inline enum xdp_action aggregate(sg_msg_t* msg, RESP_VECTOR_TYPE* current_data)`. You can build this by running `make --directory=<path/to/sgbpf> bpf_func` instead.
-   
-
 7. Create a line-separated config file containing a list of worker endpoints, in the format: IPv4_Address:Port (see the example in `my-project`). 
 
 8. Run your program: `sudo ./sg_program <path/to/bpfobjs> lo`  (remember that to load BPF programs, you need admin privileges).

@@ -51,8 +51,9 @@ int main(int argc, char *argv[]) {
     while ((bytes = recvfrom(sock, message, 1024, 0, (struct sockaddr *) &client, &clientSize)) > 0) {
       sg_msg_t* msg = (sg_msg_t*) message;
 
-      printf("\n\nrecv: '%s' with req ID %d from %d\n", 
+      fprintf(stdout, "\n\nrecv: '%s' with req ID %d from %d\n", 
         (msg->hdr.msg_type == SCATTER_MSG ? "scatter msg" : "unknown"), msg->hdr.req_id, ntohs(client.sin_port));
+      fflush(stdout);
 
       // Vector example: send vector of increasing numbers
       sg_msg_t resp_msg;
@@ -68,7 +69,7 @@ int main(int argc, char *argv[]) {
       memmove(resp_msg.body, vec, resp_msg.hdr.body_len);
       if (sendto(sock, &resp_msg, sizeof(sg_msg_t), 0, (struct sockaddr *)&client, clientSize) < 0) {
           perror("sendto()");
-          exit(2);
+          continue;
       }
 
     }

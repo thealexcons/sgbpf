@@ -105,7 +105,7 @@ static inline int handle_clean_req_msg(char* payload, __u32 payload_size, void* 
 
     bpf_spin_lock(&rs->count_lock); // probably not needed, as it won't be under contention
     rs->count = 0;
-    rs->complete = 0;
+    // rs->complete = 0;
     bpf_spin_unlock(&rs->count_lock);
 
     // reset the stale aggregated data
@@ -206,7 +206,7 @@ int scatter_prog(struct __sk_buff* skb) {
             return TC_ACT_SHOT;
         bpf_spin_lock(&rs->count_lock);
         rs->count = 0;
-        rs->complete = 0;
+        // rs->complete = 0;
         bpf_spin_unlock(&rs->count_lock);
 
         rs->num_workers = sgh->hdr.num_pks;
@@ -361,12 +361,12 @@ int gather_prog(struct xdp_md* ctx) {
     // IN THE COMPLETION CHECK.
     // HENCE THE COMPLETION CHECK MUST TAKE PLACE HERE (IE: BEFORE AGGREGATION)
     bpf_spin_lock(&rs->count_lock);
-    if (rs->complete) {
+    if (rs->count < 0) {
         bpf_spin_unlock(&rs->count_lock);
         #ifdef BPF_DEBUG_PRINT
         bpf_printk("dropping packet, completion flag set");
         #endif
-        return XDP_PASS;
+        return XDP_PASS; // why doesn't XDP_DROP work here....
     }
 
     //_atomic_compare_exchange_n(&rs->count, &rs->num_workers, - (MAX_SOCKETS_ALLOWED+1), 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
@@ -374,8 +374,8 @@ int gather_prog(struct xdp_md* ctx) {
 
     // Check for completion and increment count
     __s64 pk_count = ++rs->count;
-    rs->complete = (rs->num_workers == pk_count);
-    // rs->count = (rs->num_workers == pk_count) ? -(MAX_SOCKETS_ALLOWED + 1) : pk_count;
+    // rs->complete = (rs->num_workers == pk_count);
+    rs->count = (rs->num_workers == pk_count) ? -(MAX_SOCKETS_ALLOWED + 1) : pk_count;
     bpf_spin_unlock(&rs->count_lock);
 
     // Annotate the packet metadata with its count
@@ -487,7 +487,7 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
 
     // Check completion satisfied and this is indeed the last required packet
     bpf_spin_lock(&rs->count_lock);
-    if (rs->complete && *pk_count == rs->num_workers) {
+    if (rs->count < 0 && *pk_count == rs->num_workers) {
         bpf_spin_unlock(&rs->count_lock);
 
         #ifdef BPF_DEBUG_PRINT
@@ -516,6 +516,7 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         // at this point, any redundant packet trying to update the aggregated 
         // response is dropped prior to the aggregation logic
 
+        // TODO come up with trace that demonstrates this is a race cond
         // this might be the issue .... if any trailing but legal packet (unlucky scheduling)
         // if still adding their part, this is a race!!
         // to perform the copy, we need some scratch pad data (in a per-cpu array)

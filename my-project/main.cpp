@@ -121,6 +121,8 @@ int main(int argc, char** argv) {
     // still seems to be a bug...
     // idek, goes on streaks where it works, sometimes randomly gives num pk mismatch??
 
+    // can we just assume reliability isn't perfect??
+
     // HOWEVER, STILL NEED TO FIX DATA MISMATCH. SOME SORT OF RACE CONDITION ON THE DATA??
 
     // WHEN SENDING MANY REQUESTS, AT SOME POINT IT LOOKS LIKE THEY GET STUCK
@@ -142,13 +144,10 @@ int main(int argc, char** argv) {
         auto aggregatedData = (uint32_t*)(buf.body);
         // std::cout << "control socket packet received\n";
         for (auto j = 0u; j < RESP_MAX_VECTOR_SIZE; j++) {
-            if (j % 5 == 0) {
-                bool c = aggregatedData[j] == j * params.numWorkersToWait;
-                if(!c) {
-                    std::cout << "DATA MISMATCH on REQ " << i << " - Got " << aggregatedData[j] << " at idx " << j << " instead of " << j * params.numWorkersToWait << std::endl;
-                    throw;
-                }
-                assert(c);
+            bool c = aggregatedData[j] == j * params.numWorkersToWait;
+            if(!c) {
+                std::cout << "DATA MISMATCH on REQ " << i << " - Got " << aggregatedData[j] << " at idx " << j << " instead of " << j * params.numWorkersToWait << std::endl;
+                throw;
             }
             // std::cout << "vec[" << i << "] = " << aggregatedData[i] << std::endl;
         }
@@ -157,12 +156,11 @@ int main(int argc, char** argv) {
             std::cout << "NUM PKS MISMATCH on REQ " << i << " - Got " << req->bufferPointers().size() << " instead of " << params.numWorkersToWait << std::endl;
             throw;
         }
-        assert(c);
 
         // std::cout << "vec[" << 300 << "] = " << aggregatedData[300] << std::endl;
         // std::cout << "Got a total of " << req->bufferPointers().size() << std::endl;
 
-        // service.freeRequest(req, true);
+        service.freeRequest(req);
 
         std::this_thread::sleep_for(std::chrono::microseconds{300});
     }

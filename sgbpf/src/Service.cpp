@@ -251,6 +251,7 @@ void Service::processPendingEvents(int requestID) {
             auto buffIdx = cqe->flags >> IORING_CQE_BUFFER_SHIFT;   // the packet's buffer index
             auto& req = d_activeRequests[reqId];                    // get the associated request
             const auto resp = (sg_msg_t*) req.data(buffIdx);
+            // assert(resp->hdr.req_id == reqId); // why??
 
             // If we are only processing packets for a given request
             if (processOnlyGivenReq && (req.id() != requestID || resp->hdr.req_id != static_cast<uint32_t>(req.id()))) {
@@ -261,20 +262,20 @@ void Service::processPendingEvents(int requestID) {
                 continue;
             }
 
-            if (req.d_status == Request::Status::TimedOut || req.hasTimedOut()) {
-                #ifdef DEBUG_PRINT
-                std::cout << "[DEBUG] Request " << req.id() << " has timed out" << std::endl;                    
-                #endif
-                req.d_status = Request::Status::TimedOut;
-                continue;
-            }
-
             // Drop any unnecessary packets (for messages beyond N in waitN or 1 in waitAny)
             // this is currently the implementation
             if (req.d_status == Request::Status::Ready) {
                 #ifdef DEBUG_PRINT
                 // std::cout << "[DEBUG] Dropping packet (request completed already)" << std::endl;
                 #endif
+                continue;
+            }
+
+            if (req.d_status == Request::Status::TimedOut || req.hasTimedOut()) {
+                #ifdef DEBUG_PRINT
+                std::cout << "[DEBUG] Request " << req.id() << " has timed out" << std::endl;                    
+                #endif
+                req.d_status = Request::Status::TimedOut;
                 continue;
             }
             

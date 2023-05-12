@@ -15,9 +15,11 @@ OUT_DIR := ./lib
 
 SOURCES := $(wildcard $(SRC_DIR)/*.cpp)
 
+# this assumes that libbpf and liburing has been built and installed
+
 $(OUTPUTFILE): $(SOURCES)
 	mkdir -p $(OUT_DIR) $(OBJ_DIR)
-	for file in $(SOURCES); do $(CC) $(CFLAGS) -c $$file -O -lbpf -luring; done
+	for file in $(SOURCES); do $(CC) $(CFLAGS) -c $$file -O -luring; done
 	mv *.o $(OBJ_DIR)
 	ar rcs $(OUT_DIR)/$@ $(wildcard $(OBJ_DIR)/*.o)	
 

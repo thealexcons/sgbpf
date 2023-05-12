@@ -1,7 +1,9 @@
-# Setup path to your sgbpf directory
+########### SETUP ############
 LIBSGBPF_DIR := ../sgbpf/
-LIBSGBPF_HEADERS := ../sgbpf/include/
-LIBSGBPF_LIB_DIR := ../sgbpf/lib/
+##############################
+
+LIBSGBPF_HEADERS := $(LIBSGBPF_DIR)/include/
+LIBSGBPF_LIB_DIR := $(LIBSGBPF_DIR)/lib/
 
 # Path to libbpf within sgbpf
 LIBBPF_HEADERS := $(LIBSGBPF_DIR)/dep/libbpf/src/root/usr/include/

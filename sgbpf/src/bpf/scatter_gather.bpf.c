@@ -486,10 +486,6 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         // at this point, any redundant packet trying to update the aggregated 
         // response is dropped prior to the aggregation logic
 
-        // AFTER: try decoupling libbpf from makefiles... libbpf installation
-        // should go INSIDE the sgbpf folder
-        // try this in a separete dir: make copy of folder like last time
-
         // TODO come up with trace that demonstrates this is a race cond
         // this might be the issue .... if any trailing but legal packet (unlucky scheduling)
         // if still adding their part, this is a race!!

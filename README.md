@@ -5,22 +5,23 @@
 
 [Link to project wiki](https://gitlab.doc.ic.ac.uk/ac3419/meng-project/-/wikis/home)
 
-## Environment setup
+<details>
+  <summary>Environment setup (old)</summary>
 
 See appendix 1 in report, but in summary:
 
 1. The following dependencies are needed (note `clang+llvm-12` is required):
-   
+
     ```$ sudo apt-get update```
 
     ```$ sudo apt install -y build-essential git make gcc clang-12 llvm-12 libelf-devgcc-multilib```
 
 2. Download the latest copy (or the release of choice) of `libbpf`:
-   
+
     ```$ git clone --depth 1 --single-branch --branch master https://github.com/libbpf/libbpf libbpf```
 
 3. Build libbpf and install the headers locally:
-   
+
     ```$ make --directory = libbpf/src all```
 
     ```$ DESTDIR=root make --directory = libbpf/src install_headers```
@@ -31,7 +32,7 @@ Note: When running the loader program, if you get a message about a missing shar
 the missed shared object to `lib/x86_64-linux-gnu` or update the `LD_LIBRARY_PATH` path ([example](https://stackoverflow.com/questions/70696552/cannot-open-shared-object-file-no-such-file-or-directory-including-libbpf-wit)).
 
 4. Install `liburing` headers on the system:
-   
+
     ```$ git clone https://github.com/axboe/liburing```
 
     ```$ cd liburing```
@@ -39,6 +40,42 @@ the missed shared object to `lib/x86_64-linux-gnu` or update the `LD_LIBRARY_PAT
     ```$ ./configure && make```
 
     ```$ sudo make install```
+
+</details>
+
+## Environment setup
+
+1. The following dependencies are needed (note `clang+llvm-12` is required):
+
+  ```$ sudo apt-get update```
+
+  ```$ sudo apt install -y build-essential git make gcc clang-12 llvm-12 libelf-devgcc-multilib```
+
+2. Ensure you have installed `liburing` and its headers on your system:
+
+    ```$ git clone https://github.com/axboe/liburing```
+
+    ```$ cd liburing```
+
+    ```$ ./configure && make```
+
+    ```$ sudo make install```
+
+3. Clone this project (**and all the submodules**) using:
+
+  ```$ git clone --recurse-submodules https://gitlab.doc.ic.ac.uk/ac3419/meng-project.git```
+
+4. Build and install `libbpf` on your system (included as a submodule inside `sgbpf`):
+
+    ```$ cd meng-project/sgbpf/dep/libbpf ```
+
+    ```$ make --directory=src all```
+
+    ```$ DESTDIR=root make --directory=src install_headers```
+
+    ```$ make --directory=src install_uapi_headers```
+
+Note that some of these commands may require `sudo` to install headers globally.
 
 
 ## Starting a new project

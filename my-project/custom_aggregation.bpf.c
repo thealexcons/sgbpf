@@ -19,7 +19,7 @@ int aggregation_prog(struct xdp_md* xdp_ctx) {
         ctx.current_value[i] += ((RESP_VECTOR_TYPE*)ctx.pk_msg->body)[i];
     }
 
-    AGGREGATION_PROG_OUTRO(ctx);
+    AGGREGATION_PROG_OUTRO(ctx, DISCARD_PK);
 }
 
     // ITEM LIST (IN ORDER OF PRIORITY):

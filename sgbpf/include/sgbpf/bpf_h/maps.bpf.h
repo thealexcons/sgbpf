@@ -59,10 +59,10 @@ struct {
 
 // State associated to each request
 struct req_state {
-    __s64                count;         // Num responses received
-    struct bpf_spin_lock count_lock;    // Lock to R/W to count variable
-    __u64                num_workers;   // Num workers to wait for completion
-    __u64                post_agg_count;
+    __s64                count;          // Num responses received (< 0 indicates completion)
+    struct bpf_spin_lock count_lock;     // Lock to R/W to count variable
+    __s64                num_workers;    // Num workers to wait for completion
+    __s64                post_agg_count; // Num packets that have been aggregated
 };
 
 struct {
@@ -87,19 +87,6 @@ struct {
     __uint(max_entries, MAX_ACTIVE_REQUESTS_ALLOWED);
     __uint(pinning, LIBBPF_PIN_BY_NAME);
 } map_aggregated_response SEC(".maps");
-
-
-struct tmp_data {
-    RESP_VECTOR_TYPE data[RESP_MAX_VECTOR_SIZE];
-};
-
-struct {
-    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
-    __type(key, __u32);
-    __type(value, struct tmp_data);
-    __uint(max_entries, 1);
-} map_tmp_data SEC(".maps");
-
 
 // FOr multi-packet vector aggregation, extra layer of indirection is needed
 // to store MAX_PACKETS * DATA_ARRAY per request

@@ -19,14 +19,15 @@
 
 #define MOD_POW2(x, y) (x & (y - 1))
 #define GET_REQ_MAP_SLOT(req_id) MOD_POW2(req_id, MAX_ACTIVE_REQUESTS_ALLOWED)
-#define ATOMIC_LOAD_S64(ptr, dest) asm volatile("lock *(u64 *)(%0+0) += %1" : "=r"(dest) : "r"(0), "0"(ptr));
-
 #define UNLIKELY(cond) __builtin_expect ((cond), 0)
 #define LIKELY(cond) __builtin_expect ((cond), 1)
 
 #define CHECK_MAP_LOOKUP(ptr, ret) \
     if (UNLIKELY(!ptr)) \
         return ret;
+
+#define ALLOW_PK 0      // Allow the individual packet through to user-space
+#define DISCARD_PK 1    // Discard the individual packet after aggregation
 
 static inline enum xdp_action parse_msg_xdp(struct xdp_md* ctx, sg_msg_t** msg) {
     void* data = (void *)(long)ctx->data;
@@ -56,7 +57,7 @@ static inline enum xdp_action parse_msg_xdp(struct xdp_md* ctx, sg_msg_t** msg) 
     return XDP_PASS;
 }
 
-static __always_inline enum xdp_action post_aggregation_process(struct xdp_md* ctx, sg_msg_t* resp_msg) {
+static __always_inline enum xdp_action post_aggregation_process(struct xdp_md* ctx, sg_msg_t* resp_msg, __u8 action) {
     // Set the flag in the payload for the upper layer programs
     resp_msg->hdr.flags = SG_MSG_F_PROCESSED;
     
@@ -64,23 +65,21 @@ static __always_inline enum xdp_action post_aggregation_process(struct xdp_md* c
     
     struct req_state* rs = bpf_map_lookup_elem(&map_req_state, &slot);
     CHECK_MAP_LOOKUP(rs, XDP_ABORTED);
-
-    // Update the annotated pk metadata with the total sum to
-    // mark the pk as aggregated
-    // __u32* pk_count = (void*)(unsigned long) ctx->data_meta;
-    // if (UNLIKELY( pk_count + 1 > (void*)(unsigned long) ctx->data )) {
-    //     return XDP_ABORTED;
-    // }
-
-    // bpf_spin_lock(&rs->post_agg_count_lock); // needed??
-    // rs->post_agg_count++;   // can probably be done atomically
-    // bpf_spin_unlock(&rs->post_agg_count_lock);
     __sync_add_and_fetch(&rs->post_agg_count, 1);
 
     #ifdef DEBUG_PRINT
     bpf_printk("Finished aggregation, SET pk count to %d", *pk_count);
     #endif
-    return XDP_PASS;
+
+    // If ALLOW_PK, all packets should be passed through to userspace
+    if (action == ALLOW_PK)
+        return XDP_PASS;
+
+    // If DISCARD_PK, all packets except the last one should be dropped
+    if (__sync_val_compare_and_swap(&rs->post_agg_count, rs->num_workers, -1) == rs->num_workers) {
+        return XDP_PASS;
+    }
+    return XDP_DROP;
 }
 
 // A helper context structure for user-defined aggregation programs
@@ -104,12 +103,9 @@ struct aggregation_prog_ctx {
     bpf_spin_lock(ctx.lock); \
 }
 
-#define AGGREGATION_PROG_OUTRO(ctx) { \
+#define AGGREGATION_PROG_OUTRO(ctx, pk_action) { \
     bpf_spin_unlock(ctx.lock); \
-    int act; \
-    if ((act = post_aggregation_process(ctx.xdp_ctx, ctx.pk_msg)) != XDP_PASS) \
-        return act; \
-    return XDP_PASS; \
+    return post_aggregation_process(ctx.xdp_ctx, ctx.pk_msg, pk_action); \
 }
 
 

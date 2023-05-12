@@ -21,6 +21,8 @@
 #define SG_MSG_FLAGS_OFF (ETH_HLEN + sizeof(struct iphdr) + sizeof(struct udphdr) + offsetof(sg_msg_t, hdr) + offsetof(struct sg_msg_hdr, flags))
 #define SG_MSG_BODY_OFF (ETH_HLEN + sizeof(struct iphdr) + sizeof(struct udphdr) + offsetof(sg_msg_t, body))
 
+/**************************** HELPER FUNCTIONS ********************************/
+
 static void __always_inline clone_and_send_packet(struct __sk_buff* skb, 
                                                   uint32_t worker_ip,   // Network byte order
                                                   uint16_t worker_port, // Network byte order
@@ -37,8 +39,8 @@ static void __always_inline clone_and_send_packet(struct __sk_buff* skb,
     #endif
 
     // 1. Update the packet header for the new destination
-    bpf_skb_store_bytes(skb, IP_DEST_OFF, &worker_ip, sizeof(worker_ip), BPF_F_RECOMPUTE_CSUM);
-    bpf_skb_store_bytes(skb, UDP_DEST_OFF, &worker_port, sizeof(worker_port), BPF_F_RECOMPUTE_CSUM);
+    bpf_skb_store_bytes(skb, IP_DEST_OFF, &worker_ip, sizeof(worker_ip), 0);
+    bpf_skb_store_bytes(skb, UDP_DEST_OFF, &worker_port, sizeof(worker_port), 0);
     bpf_skb_store_bytes(skb, UDP_SRC_OFF, &app_port, sizeof(app_port), BPF_F_RECOMPUTE_CSUM);
 
     // 2. Clone and redirect the packet to the worker
@@ -100,7 +102,6 @@ static inline int handle_clean_req_msg(char* payload, __u32 payload_size, void* 
     bpf_spin_lock(&rs->count_lock); // probably not needed, as it won't be under contention
     rs->count = 0;
     rs->post_agg_count = 0;
-    // rs->complete = 0;
     bpf_spin_unlock(&rs->count_lock);
 
     // reset the stale aggregated data
@@ -114,6 +115,8 @@ static inline int handle_clean_req_msg(char* payload, __u32 payload_size, void* 
     return TC_ACT_SHOT;
 }
 
+/******************************************************************************/
+
 
 SEC("tc")
 int scatter_prog(struct __sk_buff* skb) {
@@ -122,6 +125,8 @@ int scatter_prog(struct __sk_buff* skb) {
     // try scatter in userspace with io_uring, compare performance (throughput)
     // with scattering in skb. does this savve memcpys?
     // try for a very large number of reqs
+    // IMPORTANT POINT: Note that cloning within the kernel means we avoid multiple traversals 
+    // since TC is located AFTER the stack on egress.
 
     void* data = (void *)(long)skb->data;
 	void* data_end = (void *)(long)skb->data_end;
@@ -230,42 +235,6 @@ int scatter_prog(struct __sk_buff* skb) {
 }
 
 
-// static __always_inline enum worker_response_status* get_worker_status(__u32 source_ip, __u16 source_port) {
-//     struct ubpf_worker w;
-//     // without this, the verifier thinks we are accessing uninitialised memory
-//     __builtin_memset(&w, 0, sizeof(struct ubpf_worker));
-//     w.ip_addr = source_ip;
-//     w.port = source_port;
-//     return bpf_map_lookup_elem(&map_workers_resp_status, &w);
-// }
-
-
-// static __u64 check_worker_status(void* map, worker_info_t* worker, worker_resp_status_t* status, __u8* waiting) {
-//     if (!status)
-//         return 1;
-
-//     *waiting = (*status == WAITING_FOR_RESPONSE);
-//     return *waiting ? 1 : 0;
-// }
-
-// static __u64 count_workers(void* map, __u32* idx, worker_info_t* worker, __u32* count) {
-//     if (!worker || worker->app_port == 0)
-//         return 1;
-
-//     (*count)++;
-//     return 0;
-// }
-
-// static __u64 reset_worker_status(void* map, worker_info_t* worker, worker_resp_status_t* status, __u8* waiting) {
-//     if (!status)
-//         return 1;
-
-//     worker_resp_status_t updated_status = WAITING_FOR_RESPONSE;
-//     bpf_map_update_elem(map, worker, &updated_status, 0);
-//     return 0;
-// }
-
-
 SEC("xdp")
 int gather_prog(struct xdp_md* ctx) {
     void* data = (void *)(long)ctx->data;
@@ -352,32 +321,20 @@ int gather_prog(struct xdp_md* ctx) {
         #ifdef BPF_DEBUG_PRINT
         bpf_printk("dropping packet, completion flag set");
         #endif
-        return XDP_PASS; // why doesn't XDP_DROP work here....
+        return XDP_PASS;
     }
 
     // Check for completion and increment count
     __s64 pk_count = ++rs->count;
-    // rs->complete = (rs->num_workers == pk_count);
     rs->count = (rs->num_workers == pk_count) ? -(MAX_SOCKETS_ALLOWED + 1) : pk_count;
     bpf_spin_unlock(&rs->count_lock);
 
-    // Annotate the packet metadata with its count
-    // if (bpf_xdp_adjust_meta(ctx, -(int) sizeof(__u32)) < 0)
-    //     return XDP_ABORTED;
-
-    // void* data_updated = (void*)(unsigned long) ctx->data;
-    // __u32* pk_count_meta;
-    // pk_count_meta = (void*)(unsigned long) ctx->data_meta;
-    // if (UNLIKELY( pk_count_meta + 1 > data_updated ))
-    //     return XDP_ABORTED;
-    // *pk_count_meta = (__u32) pk_count;
-
-
-    // Since reparsing of the packet is needed after modfying the metadata,
-    // calling a regular C function does not provide any extra performance benefits.
-    // Mention in report that both approaches mentioned and that microbenchmarks
-    // reveal performance is exactly the same, so opt for the easier to use option.
-    // Microbenchmarks show the reparsing the packet (ptr bounds check take around 20 ns)
+    // Mention in report that both approaches tried (regular func vs BPF) and 
+    // that microbenchmarks reveal performance is exactly the same, so opt for the easier to use option.
+    // Microbenchmarks show the reparsing the packet (ptr bounds check take around 20 ns), which is
+    // neglible in comparison with the aggregation logic. Hence from a library design POV, it is better
+    // to have a uniform API which is easy to use (mention that supporting both versions requires
+    // a more complex Makefile due to conditional compilation)
 
     // Standard method: use BPF program defined in separate object file
     bpf_tail_call(ctx, &map_aggregation_progs, CUSTOM_AGGREGATION_PROG); // aggregation prog takes around 1 us only
@@ -449,21 +406,13 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
     //     return TC_ACT_OK;
     // }
 
-    // not needed then? no need to keep track of pk nums, just post agg count
-
-    // Check completion satisfied and this is indeed the last required packet
-    // note: the last packet may be trailing: ie pk 10 may reach this point
-    // but pk 9 is still about to start  the aggregation
-    // hence if we can fix this, we don't need to make a copy of the vector
-
-    // add option to early drop packets (ideally in XDP layer?)
-    // option specified at compile-time by the user in their program
-
-    // __atomic_compare_exchange_n(&rs->post_agg_count, &rs->num_workers, 0, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)
-    // bpf_spin_lock(&rs->count_lock);
-    if (__sync_val_compare_and_swap(&rs->post_agg_count, rs->num_workers, 0) == rs->num_workers) {
-        // bpf_spin_unlock(&rs->count_lock);
-
+    // If post_agg_count is -1, then it must have been set in the post aggregation
+    // function if DISCARD_PK is specified and all required packets been aggregated.
+    // If post_agg_count is N, then it was not modified after the increment in the post
+    // aggregation function because ALLOW_PK was specified.
+    __u8 completed_discard_pk = __sync_val_compare_and_swap(&rs->post_agg_count, -1, 0) == -1;
+    __u8 completed_allow_pk = __sync_val_compare_and_swap(&rs->post_agg_count, rs->num_workers, 0) == rs->num_workers;
+    if (completed_allow_pk || completed_discard_pk) {
         #ifdef BPF_DEBUG_PRINT
         bpf_printk("!!! REQUEST %d COMPLETED WITH COUNT, NOTIFYING CTRL SOCKET !!!", resp_msg->hdr.req_id);
         #endif
@@ -473,10 +422,13 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         CHECK_MAP_LOOKUP(ctrl_sk_port, TC_ACT_SHOT);
         
         // Forward the final packet as usual, but mark it as cloned to avoid duplicate aggregation
-        const unsigned char cloned_flag = SG_MSG_F_LAST_CLONED;
-        bpf_skb_store_bytes(skb, SG_MSG_FLAGS_OFF, &cloned_flag, sizeof(unsigned char), BPF_F_RECOMPUTE_CSUM);
-        bpf_clone_redirect(skb, skb->ifindex, 0);
-
+        // Only do this if ALLOW_PK was set (otherwise we don't care about the packet)    
+        if (completed_allow_pk) {
+            const unsigned char cloned_flag = SG_MSG_F_LAST_CLONED;
+            bpf_skb_store_bytes(skb, SG_MSG_FLAGS_OFF, &cloned_flag, sizeof(unsigned char), BPF_F_RECOMPUTE_CSUM);
+            bpf_clone_redirect(skb, skb->ifindex, 0);
+        }
+        
         // Notify the ctrl socket with the aggregated response in the packet body
         struct aggregation_entry* agg_entry = bpf_map_lookup_elem(&map_aggregated_response, &slot);
         CHECK_MAP_LOOKUP(agg_entry, TC_ACT_SHOT);
@@ -487,27 +439,13 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
 
         // Note: spinlock not needed for reading the aggregated data because 
         // at this point, any redundant packet trying to update the aggregated 
-        // response is dropped prior to the aggregation logic
-
-        // struct tmp_data* td = bpf_map_lookup_elem(&map_tmp_data, &zero);
-        // CHECK_MAP_LOOKUP(td, TC_ACT_SHOT);
-
-        // bpf_spin_lock(&agg_entry->lock);
-        // #pragma clang loop unroll(full)
-        // for (__u32 i = 0; i < RESP_MAX_VECTOR_SIZE; ++i) {
-        //     // td->data[i] = agg_entry->data[i];   // copy vector to cpu-local memory
-        //     agg_entry->data[i] = 0;             // clear vector contents
-        // }
-        // bpf_spin_unlock(&agg_entry->lock);
+        // response is dropped before executing the aggregation logic
         bpf_skb_store_bytes(skb, SG_MSG_BODY_OFF, (char*)agg_entry->data, sizeof(RESP_VECTOR_TYPE) * RESP_MAX_VECTOR_SIZE, 0);
         bpf_skb_store_bytes(skb, UDP_DEST_OFF, ctrl_sk_port, sizeof(*ctrl_sk_port), BPF_F_RECOMPUTE_CSUM);
         clear_vector(agg_entry->data);
-        return TC_ACT_OK;
-    } 
-    // else {
-    //     bpf_spin_unlock(&rs->count_lock);
-    // }
-    return TC_ACT_SHOT;
+    }
+
+    return TC_ACT_OK;
 }
 
 

@@ -88,7 +88,7 @@ static inline int handle_clean_req_msg(char* payload, __u32 payload_size, void* 
         return TC_ACT_OK;
 
     #ifdef DEBUG_PRINT
-    bpf_printk("Got cleanup msg for req id %d (with slot %d)", clean_msg->req_id, slot);
+    bpf_printk("Got cleanup msg for req id %d", clean_msg->req_id);
     #endif
     
     __u32 slot = GET_REQ_MAP_SLOT(clean_msg->req_id);

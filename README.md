@@ -67,13 +67,13 @@ the missed shared object to `lib/x86_64-linux-gnu` or update the `LD_LIBRARY_PAT
 
 4. Build and install `libbpf` on your system (included as a submodule inside `sgbpf`):
 
-    ```$ cd meng-project/sgbpf/dep/libbpf ```
+    ```$ cd meng-project/sgbpf/dep/libbpf/src ```
 
-    ```$ make --directory=src all```
+    ```$ make all```
 
-    ```$ DESTDIR=root make --directory=src install_headers```
+    ```$ DESTDIR=root make install_headers```
 
-    ```$ make --directory=src install_uapi_headers```
+    ```$ make install_uapi_headers```
 
 Note that some of these commands may require `sudo` to install headers globally.
 

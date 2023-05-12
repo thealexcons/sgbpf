@@ -2,29 +2,31 @@
 INC_DIR := ./include/sgbpf
 LIBBPF_INC := ./dep/libbpf/src/root/usr/include/
 LIBBPF_LIB_DIR := ./dep/libbpf/src/
-LIBBPF_HEADERS_DESTDIR := root
 
 ########### USER LIB ###########
-CC := g++
-OUTPUTFILE := libsgbpf.a
-CFLAGS= -std=c++17 -O2 -g -Wall -I$(INC_DIR) -I$(LIBBPF_INC) -L$(LIBBPF_LIB_DIR) -D DEBUG_PRINT
+CC_ULIB := g++
+CFLAGS_ULIB= -std=c++17 -O2 -g -Wall -I$(INC_DIR) -I$(LIBBPF_INC) -L$(LIBBPF_LIB_DIR) -luring -D DEBUG_PRINT
 
-SRC_DIR := ./src
-OBJ_DIR := ./obj
-OUT_DIR := ./lib
+OUT_FILE_ULIB := libsgbpf.a
+OBJ_DIR_ULIB := ./obj
+OUT_DIR_ULIB := ./lib
 
-SOURCES := $(wildcard $(SRC_DIR)/*.cpp)
+SOURCES_ULIB := $(wildcard src/*.cpp)
 
 # this assumes that libbpf and liburing has been built and installed
 
-$(OUTPUTFILE): $(SOURCES)
-	mkdir -p $(OUT_DIR) $(OBJ_DIR)
-	for file in $(SOURCES); do $(CC) $(CFLAGS) -c $$file -O -luring; done
-	mv *.o $(OBJ_DIR)
-	ar rcs $(OUT_DIR)/$@ $(wildcard $(OBJ_DIR)/*.o)	
+$(OUT_FILE_ULIB): $(SOURCES_ULIB)
+	mkdir -p $(OUT_DIR_ULIB) $(OBJ_DIR_ULIB)
+	for file in $(SOURCES_ULIB); do $(CC_ULIB) $(CFLAGS_ULIB) -c $$file -O; done
+	mv *.o $(OBJ_DIR_ULIB)
+	ar rcs $(OUT_DIR_ULIB)/$@ $(wildcard $(OBJ_DIR_ULIB)/*.o)	
 
 
 ############ BPF ##############
+CC_BPF := clang-12
+CFLAGS_BPF= -target bpf -emit-llvm -S -g -O2 -I$(INC_DIR) -D __BPF_TRACING__
+LLC_BPF := llc-12
+LLCFLAGS_BPF := -march=bpf -filetype=obj
 
 BPF_PROG := scatter_gather.bpf.o
 AGGREGATION_BPF_PROG := aggregation.bpf.o
@@ -50,7 +52,7 @@ __check_defined_set_default = \
 .SILENT: bpf bpf_func
 
 .ONESHELL:
-bpf: $(SRC_DIR)/bpf/scatter_gather.bpf.c
+bpf: src/bpf/scatter_gather.bpf.c
 	$(call check_defined_err, CUSTOM_AGGREGATION_BPF_PROG)
 	$(call check_defined_set_default, OUTPUT_BPF_OBJ_DIR)
 
@@ -59,16 +61,16 @@ bpf: $(SRC_DIR)/bpf/scatter_gather.bpf.c
 
 	# Build main BPF object file
 	echo "[1/2] Building main eBPF object file..."
-	clang-12 -target bpf -emit-llvm -S -I$(INC_DIR) -D __BPF_TRACING__ -g -O2 -c $^ -o $(BPF_PROG).ll || exit
-	llc-12 -march=bpf -filetype=obj -o $(BPF_PROG) $(BPF_PROG).ll
+	$(CC_BPF) $(CFLAGS_BPF) -c $^ -o $(BPF_PROG).ll || exit
+	$(LLC_BPF) $(LLCFLAGS_BPF) -o $(BPF_PROG) $(BPF_PROG).ll
 	rm -f $(BPF_PROG).ll
 	mv $(BPF_PROG) ${OUTPUT_BPF_OBJ_DIR}
 	echo "[1/2] Built eBPF object file and placed under ${OUTPUT_BPF_OBJ_DIR}\n"
 
 	# Build custom aggregation BPF object file
 	echo "[2/2] Building custom aggregation eBPF program..."
-	clang-12 -target bpf -emit-llvm -S -I$(INC_DIR) -D __BPF_TRACING__ -g -O2 -c ${CUSTOM_AGGREGATION_BPF_PROG} -o $(AGGREGATION_BPF_PROG).ll || exit
-	llc-12 -march=bpf -filetype=obj -o $(AGGREGATION_BPF_PROG) $(AGGREGATION_BPF_PROG).ll
+	$(CC_BPF) $(CFLAGS_BPF) -c ${CUSTOM_AGGREGATION_BPF_PROG} -o $(AGGREGATION_BPF_PROG).ll || exit
+	$(LLC_BPF) $(LLCFLAGS_BPF) -o $(AGGREGATION_BPF_PROG) $(AGGREGATION_BPF_PROG).ll
 	rm -f $(AGGREGATION_BPF_PROG).ll
 	mv $(AGGREGATION_BPF_PROG) ${OUTPUT_BPF_OBJ_DIR}
 	echo "[2/2] Built custom aggregation eBPF program and placed under ${OUTPUT_BPF_OBJ_DIR}\n"
@@ -79,6 +81,6 @@ all: $(OUTPUTFILE)
 
 .PHONY: clean 
 clean:
-	rm -rf $(OBJ_DIR)
+	rm -rf $(OBJ_DIR_ULIB)
 	rm -rf $(BPF_OBJ_DIR)
-	rm -rf $(OUT_DIR)
+	rm -rf $(OUT_DIR_ULIB)

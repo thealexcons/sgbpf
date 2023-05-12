@@ -15,7 +15,7 @@ struct {
     __uint(type, BPF_MAP_TYPE_PROG_ARRAY);
     __type(key, __u32);
     __type(value, __u32);
-    __uint(max_entries, NUM_AGGREGATION_PROGS);
+    __uint(max_entries, 1);
 } map_aggregation_progs SEC(".maps");
 
 
@@ -93,5 +93,7 @@ struct {
 
 // To unpin a map with the pinning field set, do:
 // sudo rm /sys/fs/bpf/<map_name>
+
+// locked memory issue: ulimit -l unlimited 
 
 #endif // MAPS_BPF_H

@@ -27,7 +27,7 @@ Context::Context(const char* bpfObjectsPath, const char* interfaceName)
     d_gatherProgHandle = ebpf::XDPHook::attach(d_ifindex, d_gatherProg);
 
     auto vecAggProgsMap = d_object.findMapByName("map_aggregation_progs").value();
-    auto progIdx = CUSTOM_AGGREGATION_PROG;
+    auto progIdx = CUSTOM_AGGREGATION_PROG_IDX;
     auto customAggregationProg = d_aggregationProgObject.findProgramByName("aggregation_prog").value();
     auto customAggregationProgFd = customAggregationProg.fd();
     vecAggProgsMap.update(&progIdx, &customAggregationProgFd);

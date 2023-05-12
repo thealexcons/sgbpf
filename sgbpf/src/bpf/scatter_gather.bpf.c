@@ -48,11 +48,6 @@ static void __always_inline clone_and_send_packet(struct __sk_buff* skb,
 
     // Cloning within the kernel means we avoid multiple user-kernel interactions
     // and multiple traversals through the TCP/IP stack. See Electrode paper (consensus)
-
-    // Example of modifying the payload
-    // char c = '_';
-    // int off = sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr);
-    // bpf_skb_store_bytes(skb, off, &c, sizeof(c), BPF_F_RECOMPUTE_CSUM);  
 }
 
 
@@ -326,7 +321,7 @@ int gather_prog(struct xdp_md* ctx) {
 
     // Check for completion and increment count
     __s64 pk_count = ++rs->count;
-    rs->count = (rs->num_workers == pk_count) ? -(MAX_SOCKETS_ALLOWED + 1) : pk_count;
+    rs->count = (rs->num_workers == pk_count) ? -1 : pk_count;
     bpf_spin_unlock(&rs->count_lock);
 
     // Mention in report that both approaches tried (regular func vs BPF) and 
@@ -337,7 +332,7 @@ int gather_prog(struct xdp_md* ctx) {
     // a more complex Makefile due to conditional compilation)
 
     // Standard method: use BPF program defined in separate object file
-    bpf_tail_call(ctx, &map_aggregation_progs, CUSTOM_AGGREGATION_PROG); // aggregation prog takes around 1 us only
+    bpf_tail_call(ctx, &map_aggregation_progs, CUSTOM_AGGREGATION_PROG_IDX); // aggregation prog takes around 1 us only
     return XDP_PASS;
 
 /*  SCALAR AGGREGATION EXAMPLE:

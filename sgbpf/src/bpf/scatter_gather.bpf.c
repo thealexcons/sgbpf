@@ -119,6 +119,10 @@ SEC("tc")
 int scatter_prog(struct __sk_buff* skb) {
     // START_TIMER("scatter_prog"); // hot path takes around 10 to 20 us
 
+    // try scatter in userspace with io_uring, compare performance (throughput)
+    // with scattering in skb. does this savve memcpys?
+    // try for a very large number of reqs
+
     void* data = (void *)(long)skb->data;
 	void* data_end = (void *)(long)skb->data_end;
 	struct ethhdr* ethh;
@@ -333,8 +337,6 @@ int gather_prog(struct xdp_md* ctx) {
         #endif
     }
 
-    // Drop packet if it is no longer necessary, to avoid racy reads when copying
-    // the aggregated value into the final ctrl sk packet
     __u32 slot = GET_REQ_MAP_SLOT(resp_msg->hdr.req_id);
     
     struct req_state* rs = bpf_map_lookup_elem(&map_req_state, &slot);
@@ -360,15 +362,15 @@ int gather_prog(struct xdp_md* ctx) {
     bpf_spin_unlock(&rs->count_lock);
 
     // Annotate the packet metadata with its count
-    if (bpf_xdp_adjust_meta(ctx, -(int) sizeof(__u32)) < 0)
-        return XDP_ABORTED;
+    // if (bpf_xdp_adjust_meta(ctx, -(int) sizeof(__u32)) < 0)
+    //     return XDP_ABORTED;
 
-    void* data_updated = (void*)(unsigned long) ctx->data;
-    __u32* pk_count_meta;
-    pk_count_meta = (void*)(unsigned long) ctx->data_meta;
-    if (UNLIKELY( pk_count_meta + 1 > data_updated ))
-        return XDP_ABORTED;
-    *pk_count_meta = (__u32) pk_count;
+    // void* data_updated = (void*)(unsigned long) ctx->data;
+    // __u32* pk_count_meta;
+    // pk_count_meta = (void*)(unsigned long) ctx->data_meta;
+    // if (UNLIKELY( pk_count_meta + 1 > data_updated ))
+    //     return XDP_ABORTED;
+    // *pk_count_meta = (__u32) pk_count;
 
 
     // Since reparsing of the packet is needed after modfying the metadata,
@@ -449,18 +451,16 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
 
     // not needed then? no need to keep track of pk nums, just post agg count
 
-
     // Check completion satisfied and this is indeed the last required packet
     // note: the last packet may be trailing: ie pk 10 may reach this point
     // but pk 9 is still about to start  the aggregation
     // hence if we can fix this, we don't need to make a copy of the vector
 
+    // add option to early drop packets (ideally in XDP layer?)
+    // option specified at compile-time by the user in their program
+
     // __atomic_compare_exchange_n(&rs->post_agg_count, &rs->num_workers, 0, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)
     // bpf_spin_lock(&rs->count_lock);
-    // __u64* post_agg_count;
-    // __u64* ptr = &rs->post_agg_count;
-    // ATOMIC_LOAD_S64(ptr, post_agg_count);
-    // __sync_val_compare_and_swap()
     if (__sync_val_compare_and_swap(&rs->post_agg_count, rs->num_workers, 0) == rs->num_workers) {
         // bpf_spin_unlock(&rs->count_lock);
 
@@ -489,28 +489,25 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         // at this point, any redundant packet trying to update the aggregated 
         // response is dropped prior to the aggregation logic
 
-        // TODO come up with trace that demonstrates this is a race cond
-        // this might be the issue .... if any trailing but legal packet (unlucky scheduling)
-        // if still adding their part, this is a race!!
-        // to perform the copy, we need some scratch pad data (in a per-cpu array)
-        // this still doesn't fix the data mismatch... idk
-        struct tmp_data* td = bpf_map_lookup_elem(&map_tmp_data, &zero);
-        CHECK_MAP_LOOKUP(td, TC_ACT_SHOT);
+        // struct tmp_data* td = bpf_map_lookup_elem(&map_tmp_data, &zero);
+        // CHECK_MAP_LOOKUP(td, TC_ACT_SHOT);
 
-        bpf_spin_lock(&agg_entry->lock);
-        #pragma clang loop unroll(full)
-        for (__u32 i = 0; i < RESP_MAX_VECTOR_SIZE; ++i) {
-            td->data[i] = agg_entry->data[i];   // copy vector to cpu-local memory
-            agg_entry->data[i] = 0;             // clear vector contents
-        }
-        bpf_spin_unlock(&agg_entry->lock);
-        bpf_skb_store_bytes(skb, SG_MSG_BODY_OFF, (char*)td->data, sizeof(RESP_VECTOR_TYPE) * RESP_MAX_VECTOR_SIZE, 0);
+        // bpf_spin_lock(&agg_entry->lock);
+        // #pragma clang loop unroll(full)
+        // for (__u32 i = 0; i < RESP_MAX_VECTOR_SIZE; ++i) {
+        //     // td->data[i] = agg_entry->data[i];   // copy vector to cpu-local memory
+        //     agg_entry->data[i] = 0;             // clear vector contents
+        // }
+        // bpf_spin_unlock(&agg_entry->lock);
+        bpf_skb_store_bytes(skb, SG_MSG_BODY_OFF, (char*)agg_entry->data, sizeof(RESP_VECTOR_TYPE) * RESP_MAX_VECTOR_SIZE, 0);
         bpf_skb_store_bytes(skb, UDP_DEST_OFF, ctrl_sk_port, sizeof(*ctrl_sk_port), BPF_F_RECOMPUTE_CSUM);
+        clear_vector(agg_entry->data);
+        return TC_ACT_OK;
     } 
     // else {
     //     bpf_spin_unlock(&rs->count_lock);
     // }
-    return TC_ACT_OK;
+    return TC_ACT_SHOT;
 }
 
 

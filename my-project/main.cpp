@@ -106,10 +106,7 @@ int main(int argc, char** argv) {
     // IF WE DON'T DROP REDUNDANT PACKETS (LINE 368 IN EBPF), WE CAN JUST IGNORE THEM IN USERSPACE
     // still seems to be a bug...
     // idek, goes on streaks where it works, sometimes randomly gives num pk mismatch??
-
     // can we just assume reliability isn't perfect??
-
-    // HOWEVER, STILL NEED TO FIX DATA MISMATCH. SOME SORT OF RACE CONDITION ON THE DATA??
 
     // WHEN SENDING MANY REQUESTS, AT SOME POINT IT LOOKS LIKE THEY GET STUCK
     // AROUND REQ 427.

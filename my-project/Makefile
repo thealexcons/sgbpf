@@ -24,10 +24,11 @@ install:
 deinstall:
 	make --directory=$(LIBBPF_LIB_DIR) clean
 	rm -rf $(LIBBPF_LIB_DIR)/$(LIBBPF_HEADERS_DESTDIR)
+	make --directory=$(LIBSGBPF_DIR) clean
 
 
 $(SG_PROGRAM): main.cpp
-	g++ -std=c++17  -fsanitize=address -I$(LIBSGBPF_HEADERS) -I$(LIBBPF_HEADERS) -L$(LIBSGBPF_LIB_DIR) -L$(LIBBPF_LIB_DIR) -g -Wall $^ -o $@ -lbpf -lsgbpf -luring -lpthread
+	g++ -fsanitize=address -std=c++17 -I$(LIBSGBPF_HEADERS) -I$(LIBBPF_HEADERS) -L$(LIBSGBPF_LIB_DIR) -L$(LIBBPF_LIB_DIR) -g -Wall $^ -o $@ -lbpf -lsgbpf -luring
 
 clean:
 	rm -f *.o *.s

@@ -44,16 +44,13 @@ int aggregation_prog(struct xdp_md* xdp_ctx) {
     // TODO: Unify aggregation types for VECTOR and SCALAR data (in common.h)
     // fsanitize issue
 
-    // two options:
-    //   things to cleanup: reset aggregated value, count, 
-    //  eager cleanup: cleanup required map state once the request finishes
-    //      // probably faster, as it avoids duplicate map lookups
-    //      // but requires user invocation to cleanup timed out requess
-    //      // Preferred? since we can assume timed out requests are not part
-    //         of the optimised path.
-    //  lazy cleanup: cleanup required map state of previous entry on scatter send
-    //      // probably slower on scatter send
-    //      // but cleanup is essentially automatic
+    // important design choice (in the evaluation):
+    //   scattering in TC
+    //   scattering in user space (with io_uring)
+    //  Num syscalls is same in both, but what about number of memcpys?
+    //  Evaluate throughput (req/s)
+
+    // have option to early drop individual packets after aggregation
 
     //  5. start thinking about evaluation (see below)
 

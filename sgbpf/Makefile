@@ -77,7 +77,7 @@ bpf: src/bpf/scatter_gather.bpf.c
 	echo "BPF OBJECT FILES BUILT"
 
 .PHONY: all
-all: $(OUTPUTFILE)
+all: $(OUT_FILE_ULIB)
 
 .PHONY: clean 
 clean:

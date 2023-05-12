@@ -2,7 +2,7 @@
 INC_DIR := ./include/sgbpf
 LIBBPF_INC := ./dep/libbpf/src/root/usr/include/
 LIBBPF_LIB_DIR := ./dep/libbpf/src/
-	
+LIBBPF_HEADERS_DESTDIR := root
 
 ########### USER LIB ###########
 CC := g++

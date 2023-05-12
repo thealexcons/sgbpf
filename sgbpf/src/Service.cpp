@@ -64,13 +64,6 @@ static void addScatterSend(io_uring* ring, int skfd, int reqID, sockaddr_in* ser
     io_uring_sqe *sqe = io_uring_get_sqe(ring);
     io_uring_prep_sendmsg(sqe, skfd, &msgh, 0);
     io_uring_sqe_set_flags(sqe, 0);
-
-    conn_info_t conn_i = {
-        .fd = skfd,
-        .type = IO_WRITE,
-        .bgid = 0,
-    };
-    memcpy(&sqe->user_data, &conn_i, sizeof(conn_info_t));
 }
 
 
@@ -212,22 +205,46 @@ Request* Service::scatter(const char* msg, size_t len, ReqParams params)
     // as a pointer into the buffer to read the packet contents.
     req->registerBuffers(&d_ioCtx.ring);
 
-    // doesn't seem to work.... sending to the last worker every time... 
-    // some sort of bug? try reproducing in separate C file
-    // for (auto& w : d_workers) {
-    //     addScatterSend(&d_ioCtx.ring, w.socketFd(), reqId, w.destAddr(), msg, len, msgFlags, num_pks);
-    // }
+    // Note the pointers to the message buffers (including the sockaddrs) need
+    // be allocated outside of the loop, because io_uring does not consume the SQEs
+    // until the io_uring_submit() call outside of the loop. Otherwise it reuses
+    // the last pointer on the stack for each SQE.
+    sg_msg_t scatter_msg;
+    memset(&scatter_msg, 0, sizeof(sg_msg_t));
+    scatter_msg.hdr.req_id = reqId;
+    scatter_msg.hdr.msg_type = SCATTER_MSG;
+    scatter_msg.hdr.body_len = std::min(len, BODY_LEN);
+    scatter_msg.hdr.num_pks = num_pks; 
+    scatter_msg.hdr.flags = msgFlags;
+    strncpy(scatter_msg.body, msg, scatter_msg.hdr.body_len);
 
-    // std::cout << io_uring_sq_ready(&d_ioCtx.ring) << std::endl;
-    // asm volatile("" ::: "memory"); // dummy instruction needed to break the memset, need something cheap
-    // addScatterSend(&d_ioCtx.ring, d_workers[3].socketFd(), reqId, d_workers[3].destAddr(), msg, len, msgFlags, num_pks);
-    // // io_uring_submit(&d_ioCtx.ring);
+    struct iovec iov = {
+		.iov_base = &scatter_msg,
+		.iov_len = sizeof(sg_msg_t),
+	};
+
+    std::vector<struct msghdr> scatterMsgs{d_workers.size()};
+    for (auto i = 0u; i < d_workers.size(); ++i) {
+        memset(&scatterMsgs[i], 0, sizeof(struct msghdr));
+    	scatterMsgs[i].msg_name = d_workers[i].destAddr();
+        scatterMsgs[i].msg_namelen = sizeof(sockaddr_in);
+        scatterMsgs[i].msg_iov = &iov;
+        scatterMsgs[i].msg_iovlen = 1;
+
+        io_uring_sqe *sqe = io_uring_get_sqe(&d_ioCtx.ring);
+        io_uring_prep_sendmsg(sqe, d_workers[i].socketFd(), &scatterMsgs[i], 0);
+        io_uring_sqe_set_flags(sqe, 0);
+    }
+    // this is scattering correctly
+    // need to look into whether the pks are being processed
+
+    // NOTE: we probably still need to write into the scatter sk to set the completion
+    // policy
 
     for (auto& w : d_workers) {
         for (auto i = 0u; i < params.numPksPerRespMsg; i++) {
             addSocketRead(&d_ioCtx.ring, w.socketFd(), reqId, Request::MaxBufferSize, IOSQE_BUFFER_SELECT);
         }
-        addScatterSend(&d_ioCtx.ring, w.socketFd(), reqId, w.destAddr(), msg, len, msgFlags, num_pks);
     }
     io_uring_submit(&d_ioCtx.ring);
     req->startTimer();

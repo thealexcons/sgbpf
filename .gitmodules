@@ -1,4 +1,4 @@
 [submodule "libbpf"]
-	path = libbpf
+	path = sgbpf/dep/libbpf
 	url = git://https://github.com/thealexcons/libbpf.git
     ignore = dirty

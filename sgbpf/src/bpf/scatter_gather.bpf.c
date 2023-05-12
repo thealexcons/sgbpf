@@ -450,8 +450,15 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
     CHECK_MAP_LOOKUP(rs, TC_ACT_SHOT);
 
     // Check completion satisfied and this is indeed the last required packet
+    // note: the last packet may be trailing: ie pk 10 may reach this point
+    // but pk 9 is still performing the aggregation
+    // so we need to keep a local count here too
+    
+    // static __u32 local_count = 0;
+    // local_count = *pk_count;
     bpf_spin_lock(&rs->count_lock);
     if (rs->count < 0 && *pk_count == rs->num_workers) {
+        // local_count = 0;
         bpf_spin_unlock(&rs->count_lock);
 
         #ifdef BPF_DEBUG_PRINT
@@ -478,6 +485,10 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         // Note: spinlock not needed for reading the aggregated data because 
         // at this point, any redundant packet trying to update the aggregated 
         // response is dropped prior to the aggregation logic
+
+        // AFTER: try decoupling libbpf from makefiles... libbpf installation
+        // should go INSIDE the sgbpf folder
+        // try this in a separete dir: make copy of folder like last time
 
         // TODO come up with trace that demonstrates this is a race cond
         // this might be the issue .... if any trailing but legal packet (unlucky scheduling)

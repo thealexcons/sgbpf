@@ -42,6 +42,7 @@ int aggregation_prog(struct xdp_md* xdp_ctx) {
     // very similar measurements. is this because of ASan?
 
     // TODO: Unify aggregation types for VECTOR and SCALAR data (in common.h)
+    // fsanitize issue
 
     // two options:
     //   things to cleanup: reset aggregated value, count, 

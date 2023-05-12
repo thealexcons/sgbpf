@@ -1,12 +1,12 @@
-# Setup path to your libbpf installation
-LIBBPF_HEADERS := ../libbpf/src/root/usr/include/
-LIBBPF_HEADERS_DESTDIR := root
-LIBBPF_LIB_DIR  := ../libbpf/src/
-
 # Setup path to your sgbpf directory
 LIBSGBPF_DIR := ../sgbpf/
 LIBSGBPF_HEADERS := ../sgbpf/include/
 LIBSGBPF_LIB_DIR := ../sgbpf/lib/
+
+# Path to libbpf within sgbpf
+LIBBPF_HEADERS := $(LIBSGBPF_DIR)/dep/libbpf/src/root/usr/include/
+LIBBPF_LIB_DIR  := $(LIBSGBPF_DIR)/dep/libbpf/src/
+LIBBPF_HEADERS_DESTDIR := root
 
 SG_PROGRAM := sg_program
 

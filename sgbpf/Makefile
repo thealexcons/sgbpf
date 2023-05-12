@@ -1,16 +1,13 @@
 
+INC_DIR := ./include/sgbpf
+LIBBPF_INC := ./dep/libbpf/src/root/usr/include/
+LIBBPF_LIB_DIR := ./dep/libbpf/src/
+	
+
 ########### USER LIB ###########
 CC := g++
 OUTPUTFILE := libsgbpf.a
-
-# TODO can we somehow decouple LIBBPF from SGBPF directory structure??
-# MAYBE force the user to set an environment variable to their libbpf path
-# Since libbpf is required HERE and in the user program Makefile
-
-INC_DIR := ./include/sgbpf
-LIBBPF_INC := ../libbpf/src/root/usr/include/
-LIBBPF_SRC := ../libbpf/src/
-CFLAGS= -std=c++17 -O2 -g -Wall -I$(INC_DIR) -I$(LIBBPF_INC) -L$(LIBBPF_SRC) -D DEBUG_PRINT
+CFLAGS= -std=c++17 -O2 -g -Wall -I$(INC_DIR) -I$(LIBBPF_INC) -L$(LIBBPF_LIB_DIR) -D DEBUG_PRINT
 
 SRC_DIR := ./src
 OBJ_DIR := ./obj

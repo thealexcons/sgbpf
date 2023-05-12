@@ -61,8 +61,8 @@ struct {
 struct req_state {
     __s64                count;         // Num responses received
     struct bpf_spin_lock count_lock;    // Lock to R/W to count variable
-    __s32                num_workers;   // Num workers to wait for completion
-    // __u8                 complete;
+    __u64                num_workers;   // Num workers to wait for completion
+    __u64                post_agg_count;
 };
 
 struct {

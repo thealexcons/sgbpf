@@ -19,7 +19,7 @@
 
 #define MOD_POW2(x, y) (x & (y - 1))
 #define GET_REQ_MAP_SLOT(req_id) MOD_POW2(req_id, MAX_ACTIVE_REQUESTS_ALLOWED)
-// #define ATOMIC_LOAD_S64(ptr, dest) asm volatile("lock *(i64 *)(%0+0) += %1" : "=r"(dest) : "r"(ZERO_IDX), "0"(ptr));
+#define ATOMIC_LOAD_S64(ptr, dest) asm volatile("lock *(u64 *)(%0+0) += %1" : "=r"(dest) : "r"(0), "0"(ptr));
 
 #define UNLIKELY(cond) __builtin_expect ((cond), 0)
 #define LIKELY(cond) __builtin_expect ((cond), 1)
@@ -59,12 +59,26 @@ static inline enum xdp_action parse_msg_xdp(struct xdp_md* ctx, sg_msg_t** msg) 
 static __always_inline enum xdp_action post_aggregation_process(struct xdp_md* ctx, sg_msg_t* resp_msg) {
     // Set the flag in the payload for the upper layer programs
     resp_msg->hdr.flags = SG_MSG_F_PROCESSED;
+    
+    __u32 slot = GET_REQ_MAP_SLOT(resp_msg->hdr.req_id);
+    
+    struct req_state* rs = bpf_map_lookup_elem(&map_req_state, &slot);
+    CHECK_MAP_LOOKUP(rs, XDP_ABORTED);
+
+    // Update the annotated pk metadata with the total sum to
+    // mark the pk as aggregated
+    // __u32* pk_count = (void*)(unsigned long) ctx->data_meta;
+    // if (UNLIKELY( pk_count + 1 > (void*)(unsigned long) ctx->data )) {
+    //     return XDP_ABORTED;
+    // }
+
+    // bpf_spin_lock(&rs->post_agg_count_lock); // needed??
+    // rs->post_agg_count++;   // can probably be done atomically
+    // bpf_spin_unlock(&rs->post_agg_count_lock);
+    __sync_add_and_fetch(&rs->post_agg_count, 1);
+
     #ifdef DEBUG_PRINT
-    __u32* pk_count = (void*)(unsigned long) ctx->data_meta;
-    if (pk_count + 1 > (void*)(unsigned long) ctx->data) {
-        return XDP_ABORTED; \
-    }
-    bpf_printk("Finished aggregation with pk %d", *pk_count);
+    bpf_printk("Finished aggregation, SET pk count to %d", *pk_count);
     #endif
     return XDP_PASS;
 }

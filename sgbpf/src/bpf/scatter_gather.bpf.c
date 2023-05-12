@@ -99,6 +99,7 @@ static inline int handle_clean_req_msg(char* payload, __u32 payload_size, void* 
 
     bpf_spin_lock(&rs->count_lock); // probably not needed, as it won't be under contention
     rs->count = 0;
+    rs->post_agg_count = 0;
     // rs->complete = 0;
     bpf_spin_unlock(&rs->count_lock);
 
@@ -199,7 +200,7 @@ int scatter_prog(struct __sk_buff* skb) {
 
         bpf_spin_lock(&rs->count_lock);
         rs->count = 0;
-        // rs->complete = 0;
+        rs->post_agg_count = 0;
         bpf_spin_unlock(&rs->count_lock);
 
         rs->num_workers = sgh->hdr.num_pks;
@@ -352,9 +353,6 @@ int gather_prog(struct xdp_md* ctx) {
         return XDP_PASS; // why doesn't XDP_DROP work here....
     }
 
-    //_atomic_compare_exchange_n(&rs->count, &rs->num_workers, - (MAX_SOCKETS_ALLOWED+1), 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
-    // TODO: can we use atomics???
-
     // Check for completion and increment count
     __s64 pk_count = ++rs->count;
     // rs->complete = (rs->num_workers == pk_count);
@@ -438,31 +436,36 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
 
     __u32 slot = GET_REQ_MAP_SLOT(resp_msg->hdr.req_id);
 
-    // Lightweight XDP -> TC communication design pattern: data follows the packet
-    //    set field in XDP for skb, read in TC (data follows the packet)
-    //  atomic add in XDP, read direct from packet
-    __u32* pk_count = (void*)(unsigned long) skb->data_meta;
-    if (pk_count + 1 > (void*)(unsigned long) skb->data) {
-        return TC_ACT_OK;
-    }
-
     struct req_state* rs = bpf_map_lookup_elem(&map_req_state, &slot);
     CHECK_MAP_LOOKUP(rs, TC_ACT_SHOT);
 
+    // Lightweight XDP -> TC communication design pattern: data follows the packet
+    //    set field in XDP for skb, read in TC (data follows the packet)
+    //  atomic add in XDP, read direct from packet
+    // __u32* pk_count = (void*)(unsigned long) skb->data_meta;
+    // if (UNLIKELY( pk_count + 1 > (void*)(unsigned long) skb->data )) {
+    //     return TC_ACT_OK;
+    // }
+
+    // not needed then? no need to keep track of pk nums, just post agg count
+
+
     // Check completion satisfied and this is indeed the last required packet
     // note: the last packet may be trailing: ie pk 10 may reach this point
-    // but pk 9 is still performing the aggregation
-    // so we need to keep a local count here too
-    
-    // static __u32 local_count = 0;
-    // local_count = *pk_count;
-    bpf_spin_lock(&rs->count_lock);
-    if (rs->count < 0 && *pk_count == rs->num_workers) {
-        // local_count = 0;
-        bpf_spin_unlock(&rs->count_lock);
+    // but pk 9 is still about to start  the aggregation
+    // hence if we can fix this, we don't need to make a copy of the vector
+
+    // __atomic_compare_exchange_n(&rs->post_agg_count, &rs->num_workers, 0, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)
+    // bpf_spin_lock(&rs->count_lock);
+    // __u64* post_agg_count;
+    // __u64* ptr = &rs->post_agg_count;
+    // ATOMIC_LOAD_S64(ptr, post_agg_count);
+    // __sync_val_compare_and_swap()
+    if (__sync_val_compare_and_swap(&rs->post_agg_count, rs->num_workers, 0) == rs->num_workers) {
+        // bpf_spin_unlock(&rs->count_lock);
 
         #ifdef BPF_DEBUG_PRINT
-        bpf_printk("!!! REQUEST %d COMPLETED WITH COUNT %d, NOTIFYING CTRL SOCKET !!!", resp_msg->hdr.req_id, *pk_count);
+        bpf_printk("!!! REQUEST %d COMPLETED WITH COUNT, NOTIFYING CTRL SOCKET !!!", resp_msg->hdr.req_id);
         #endif
 
         const __u32 zero = 0;
@@ -504,9 +507,9 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         bpf_skb_store_bytes(skb, SG_MSG_BODY_OFF, (char*)td->data, sizeof(RESP_VECTOR_TYPE) * RESP_MAX_VECTOR_SIZE, 0);
         bpf_skb_store_bytes(skb, UDP_DEST_OFF, ctrl_sk_port, sizeof(*ctrl_sk_port), BPF_F_RECOMPUTE_CSUM);
     } 
-    else {
-        bpf_spin_unlock(&rs->count_lock);
-    }
+    // else {
+    //     bpf_spin_unlock(&rs->count_lock);
+    // }
     return TC_ACT_OK;
 }
 

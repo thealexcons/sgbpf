@@ -24,7 +24,7 @@ $(OUT_FILE_ULIB): $(SOURCES_ULIB)
 
 ############ BPF ##############
 CC_BPF := clang-12
-CFLAGS_BPF= -target bpf -emit-llvm -S -g -O2 -I$(INC_DIR) -D __BPF_TRACING__
+CFLAGS_BPF= -target bpf -emit-llvm -S -g -O2 -I$(INC_DIR) -D __BPF_TRACING__ -D BPF_DEBUG_PRINT
 LLC_BPF := llc-12
 LLCFLAGS_BPF := -march=bpf -filetype=obj
 

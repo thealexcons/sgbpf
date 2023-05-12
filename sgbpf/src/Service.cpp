@@ -18,7 +18,7 @@ typedef struct conn_info {
 } conn_info_t;
 
 // Add a socket read operation to the IO ring
-inline void addSocketRead(io_uring *ring, int fd, unsigned gid, size_t message_size, unsigned flags) {
+static inline void addSocketRead(io_uring *ring, int fd, unsigned gid, size_t message_size, unsigned flags) {
     io_uring_sqe *sqe = io_uring_get_sqe(ring);
     io_uring_prep_recv(sqe, fd, NULL, message_size, MSG_WAITALL); // wait for all fragments to arrive
     io_uring_sqe_set_flags(sqe, flags);
@@ -34,7 +34,7 @@ inline void addSocketRead(io_uring *ring, int fd, unsigned gid, size_t message_s
 
 
 // Add a scatter send request to the IO ring
-inline void addScatterSend(io_uring* ring, int skfd, int reqID, sockaddr_in* servAddr, const char* msg, size_t len, unsigned char flags, unsigned int num_pks) {
+static void addScatterSend(io_uring* ring, int skfd, int reqID, sockaddr_in* servAddr, const char* msg, size_t len, unsigned char flags, unsigned int num_pks) {
     // Send the message to itself
     sg_msg_t scatter_msg;
     memset(&scatter_msg, 0, sizeof(sg_msg_t));
@@ -58,7 +58,9 @@ inline void addScatterSend(io_uring* ring, int skfd, int reqID, sockaddr_in* ser
 	msgh.msg_iov = &iov;
 	msgh.msg_iovlen = 1;
 
-    // TODO look into sendmsg_zc (zero-copy), might be TCP only though...
+    // if we can't get this scatterSend crap to work, add some logic in TC
+    // which just sets the IP and port number...
+
     io_uring_sqe *sqe = io_uring_get_sqe(ring);
     io_uring_prep_sendmsg(sqe, skfd, &msgh, 0);
     io_uring_sqe_set_flags(sqe, 0);
@@ -210,12 +212,22 @@ Request* Service::scatter(const char* msg, size_t len, ReqParams params)
     // as a pointer into the buffer to read the packet contents.
     req->registerBuffers(&d_ioCtx.ring);
 
-    addScatterSend(&d_ioCtx.ring, d_scatterSkFd, reqId, &d_scatterSkAddr, msg, len, msgFlags, num_pks);
+    // doesn't seem to work.... sending to the last worker every time... 
+    // some sort of bug? try reproducing in separate C file
+    // for (auto& w : d_workers) {
+    //     addScatterSend(&d_ioCtx.ring, w.socketFd(), reqId, w.destAddr(), msg, len, msgFlags, num_pks);
+    // }
 
-    for (auto w : d_workers) {
+    // std::cout << io_uring_sq_ready(&d_ioCtx.ring) << std::endl;
+    // asm volatile("" ::: "memory"); // dummy instruction needed to break the memset, need something cheap
+    // addScatterSend(&d_ioCtx.ring, d_workers[3].socketFd(), reqId, d_workers[3].destAddr(), msg, len, msgFlags, num_pks);
+    // // io_uring_submit(&d_ioCtx.ring);
+
+    for (auto& w : d_workers) {
         for (auto i = 0u; i < params.numPksPerRespMsg; i++) {
             addSocketRead(&d_ioCtx.ring, w.socketFd(), reqId, Request::MaxBufferSize, IOSQE_BUFFER_SELECT);
         }
+        addScatterSend(&d_ioCtx.ring, w.socketFd(), reqId, w.destAddr(), msg, len, msgFlags, num_pks);
     }
     io_uring_submit(&d_ioCtx.ring);
     req->startTimer();

@@ -122,6 +122,8 @@ int scatter_prog(struct __sk_buff* skb) {
     // try for a very large number of reqs
     // IMPORTANT POINT: Note that cloning within the kernel means we avoid multiple traversals 
     // since TC is located AFTER the stack on egress.
+    // USE non blocking FD and busy wait loop, do not rely on blocking read call
+    // in experiment
 
     void* data = (void *)(long)skb->data;
 	void* data_end = (void *)(long)skb->data_end;
@@ -146,6 +148,34 @@ int scatter_prog(struct __sk_buff* skb) {
     udph = (struct udphdr*)(iph + 1);
     if ((void *)(udph + 1) > data_end)
         return TC_ACT_OK;
+
+    // bpf_printk("sending packet to %d - PRE", bpf_ntohs(udph->dest));
+
+    ////////////////////// NEW ////////////////////////////
+
+    __u32 payload_size = bpf_ntohs(udph->len) - sizeof(struct udphdr);
+    char* payload = (char*) udph + sizeof(struct udphdr);
+
+    // Note: this equality is needed so that the comparison size is known
+    // at compile-time for the loop unrolling.
+    if (payload_size != sizeof(sg_msg_t)) {
+        return TC_ACT_OK;
+    }
+
+    if (UNLIKELY( (void*) payload + payload_size > data_end )) {
+        // data_end - data = MTU size + ETH_HDR (14 bytes)
+        bpf_printk("Invalid packet size: payload might be larger than MTU?");
+        return TC_ACT_OK;
+    }
+
+    sg_msg_t* sgh = (sg_msg_t*) payload; 
+    if (UNLIKELY( sgh->hdr.msg_type != SCATTER_MSG ))
+        return TC_ACT_OK;
+
+    bpf_printk("sending packet to %d", bpf_ntohs(udph->dest));
+
+    return TC_ACT_OK;
+    ///////////////////////////////////////////////////////
 
     // view logs: sudo cat /sys/kernel/debug/tracing/trace_pipe
     // sometimes they take long to appear

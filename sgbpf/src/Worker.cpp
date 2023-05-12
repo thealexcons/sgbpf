@@ -11,6 +11,11 @@ Worker::Worker(std::string ipAddress, uint16_t port)
         throw std::runtime_error{"Invalid IPv4 address in worker config"};
     
     d_portNet = htons(d_port);
+
+    memset(&d_destAddr, 0, sizeof(sockaddr_in));
+    d_destAddr.sin_family = AF_INET;
+    d_destAddr.sin_port = d_portNet;
+    d_destAddr.sin_addr.s_addr = d_ipAddressNet;
 }
 
 std::vector<Worker> Worker::fromFile(const std::string& filePath)

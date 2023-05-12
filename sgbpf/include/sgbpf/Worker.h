@@ -20,6 +20,7 @@ private:
     std::string d_ipAddress;
     uint16_t    d_port;
     int         d_skFd = -1;
+    sockaddr_in d_destAddr;
 
 public:
 
@@ -36,6 +37,8 @@ public:
     uint16_t port() const { return d_port; }
     int socketFd() const { return d_skFd; }
 
+    sockaddr_in* destAddr() { return &d_destAddr; }
+ 
     // STATIC METHODS
     static std::vector<Worker> fromFile(const std::string& filePath);
 };

@@ -145,11 +145,8 @@ int scatter_prog(struct __sk_buff* skb) {
 		return TC_ACT_OK;
 
 	iph = (struct iphdr *)(ethh + 1);
-	if ((void *)(iph + 1) > data_end)
+	if ((void *)(iph + 1) > data_end || iph->protocol != IPPROTO_UDP)
 		return TC_ACT_OK;
-
-    if (iph->protocol != IPPROTO_UDP)
-        return TC_ACT_OK;
 
     udph = (struct udphdr*)(iph + 1);
     if ((void *)(udph + 1) > data_end)
@@ -159,30 +156,10 @@ int scatter_prog(struct __sk_buff* skb) {
 
     ////////////////////// NEW ////////////////////////////
 
-    // __u32 payload_size = bpf_ntohs(udph->len) - sizeof(struct udphdr);
-    // char* payload = (char*) udph + sizeof(struct udphdr);
+    // Move shortcut check from condition below early for non-config messages
+    if (udph->dest != udph->source)
+        return TC_ACT_OK;
 
-    // // Note: this equality is needed so that the comparison size is known
-    // // at compile-time for the loop unrolling.
-    // if (payload_size != sizeof(sg_msg_t)) {
-    //     return TC_ACT_OK;
-    // }
-
-    // if (UNLIKELY( (void*) payload + payload_size > data_end )) {
-    //     // data_end - data = MTU size + ETH_HDR (14 bytes)
-    //     bpf_printk("Invalid packet size: payload might be larger than MTU?");
-    //     return TC_ACT_OK;
-    // }
-
-    // sg_msg_t* sgh = (sg_msg_t*) payload; 
-    // if (UNLIKELY( sgh->hdr.msg_type != SCATTER_MSG ))
-    //     return TC_ACT_OK;
-    
-    // #ifdef BPF_DEBUG_PRINT
-    // bpf_printk("sending packet to %d", bpf_ntohs(udph->dest));
-    // #endif
-
-    // return TC_ACT_OK;
     ///////////////////////////////////////////////////////
 
     // view logs: sudo cat /sys/kernel/debug/tracing/trace_pipe
@@ -204,7 +181,8 @@ int scatter_prog(struct __sk_buff* skb) {
     CHECK_MAP_LOOKUP(local_application_port, TC_ACT_OK);
 
     // the scatter request is sent to "self", so have this check here
-    if (udph->dest == udph->source && udph->source == *local_application_port) {
+    // at this point, we know udph->source == udph->dest
+    if (udph->source == *local_application_port) {
         
         __u32 payload_size = bpf_ntohs(udph->len) - sizeof(struct udphdr);
         char* payload = (char*) udph + sizeof(struct udphdr);

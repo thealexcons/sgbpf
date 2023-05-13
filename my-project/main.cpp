@@ -7,11 +7,11 @@
 #include <net/if.h>
 #include <unistd.h>
 
-#include "sgbpf/Worker.h"
-#include "sgbpf/Context.h"
-#include "sgbpf/Request.h"
-#include "sgbpf/Service.h"
-#include "sgbpf/Common.h"
+#include <sgbpf/Worker.h>
+#include <sgbpf/Context.h>
+#include <sgbpf/Request.h>
+#include <sgbpf/Service.h>
+#include <sgbpf/Common.h>
 
 class BenchmarkTimer {
 public:
@@ -113,7 +113,7 @@ int main(int argc, char** argv) {
     // looks like workers ARE NOT sending data back? maybe they crashed?
 
     // std::cout << "sent scatter request" << std::endl;
-    for (auto i = 0u; i < 500; i++) {
+    for (auto i = 0u; i < 3; i++) {
         auto req = service.scatter("SCATTER", 8, params);
 
         sg_msg_t buf;

@@ -125,6 +125,12 @@ int scatter_prog(struct __sk_buff* skb) {
     // USE non blocking FD and busy wait loop, do not rely on blocking read call
     // in experiment
 
+    // verify presence of UDP stack traversals using net tracepoints shown here:
+    // sudo ls /sys/kernel/debug/tracing/events/{net,skb,udp}
+    // https://blog.yadutaf.fr/2017/07/28/tracing-a-packet-journey-using-linux-tracepoints-perf-ebpf/
+    // see this, also useful with examples: https://www.spinics.net/lists/netdev/msg118573.html
+    
+
     void* data = (void *)(long)skb->data;
 	void* data_end = (void *)(long)skb->data_end;
 	struct ethhdr* ethh;

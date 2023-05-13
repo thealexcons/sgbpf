@@ -69,10 +69,15 @@ int aggregation_prog(struct xdp_md* xdp_ctx) {
     //      find an example use case and build a naive baseline, and one using the SG library
     //      measure key metrics
     // micro benchmark: 
-    //      num syscalls (via strace) 
+    //      num syscalls (via strace or perf) 
+    //  
     //      kernel-user crossings (num ctx switches proxy?) 
     //          https://stackoverflow.com/questions/21777430/what-does-high-involuntary-context-switches-mean
-    //      num copies (to investigate) 
+    //
+    //      num copies (to investigate):
+    //          perf allows u to trace tracepoints, there is one called: skb_copy_datagram_iovec
+    //          its job is to copy datagrams to userspace on ingress: https://0x657573.wordpress.com/2010/11/29/information-on-skb_copy_datagram_iovec/
+    //      
     //      cpu usage
     //      individual components of the system 
     //          (measure per-request latency of each BPF program, profile and find hotspots)

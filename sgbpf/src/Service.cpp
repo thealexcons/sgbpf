@@ -229,6 +229,7 @@ void Service::processEvents(int requestID) {
 }
 
 
+
 void Service::processPendingEvents(int requestID) {
     bool processOnlyGivenReq = (requestID != DEFAULT_REQUEST_ID);
 
@@ -289,25 +290,30 @@ void Service::processPendingEvents(int requestID) {
                 std::cout << "[DEBUG] Request " << req.id() << " is ready" << std::endl;
                 #endif
                 req.d_status = Request::Status::Ready;
+                continue;
             }
 
             // check for multi-packet message and add more reads if necessary
             if (req.d_expectedPacketsPerMessage != resp->hdr.num_pks && resp->hdr.num_pks > 1) {
-                req.d_expectedPacketsPerMessage = resp->hdr.num_pks;                       
-            }
+                req.d_expectedPacketsPerMessage = resp->hdr.num_pks;
 
-            int remaining = 0;
-            for (const auto& [wfd, ptrs] : req.d_workerBufferPtrs) {
-                auto pksRemainingForThisWorker = abs(req.d_expectedPacketsPerMessage - ptrs.size());
-                if (pksRemainingForThisWorker > 0) {
-                    remaining += pksRemainingForThisWorker;
+                int remaining = 0;
+                for (const auto& [wfd, ptrs] : req.d_workerBufferPtrs) {
+                    auto pksRemainingForThisWorker = abs(req.d_expectedPacketsPerMessage - ptrs.size());
+                    if (pksRemainingForThisWorker > 0) {
+                        remaining += pksRemainingForThisWorker;
 
-                    // Add the remaining socket read operations to the SQ
-                    for (auto i = 0; i < pksRemainingForThisWorker; i++)
-                        addSocketRead(&d_ioCtx.ring, wfd, req.id(), Request::MaxBufferSize, IOSQE_BUFFER_SELECT);
+                        // Add the remaining socket read operations to the SQ
+                        for (auto i = 0; i < pksRemainingForThisWorker; i++)
+                            addSocketRead(&d_ioCtx.ring, wfd, req.id(), Request::MaxBufferSize, IOSQE_BUFFER_SELECT);
+                    }
                 }
+                submitPendingReads = (remaining > 0);
+                // if (submitPendingReads) {
+                //     std::cout << "remaining: " << remaining << std::endl;
+                //     std::cout << "req " << req.id() << " has num_pks = " << resp->hdr.num_pks << std::endl;
+                // }          
             }
-            submitPendingReads = (remaining > 0);
         }
     }
     io_uring_cq_advance(&d_ioCtx.ring, count);

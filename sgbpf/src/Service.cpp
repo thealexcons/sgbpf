@@ -33,38 +33,38 @@ static inline void addSocketRead(io_uring *ring, int fd, unsigned gid, size_t me
 }
 
 
-// Add a scatter send request to the IO ring
-static void addScatterSend(io_uring* ring, int skfd, int reqID, sockaddr_in* servAddr, const char* msg, size_t len, unsigned char flags, unsigned int num_pks) {
-    // Send the message to itself
-    sg_msg_t scatter_msg;
-    memset(&scatter_msg, 0, sizeof(sg_msg_t));
-    scatter_msg.hdr.req_id = reqID;
-    scatter_msg.hdr.msg_type = SCATTER_MSG;
-    scatter_msg.hdr.body_len = std::min(len, BODY_LEN);
-    scatter_msg.hdr.num_pks = num_pks; 
-    scatter_msg.hdr.flags = flags;
-    strncpy(scatter_msg.body, msg, scatter_msg.hdr.body_len);
+// // Add a scatter send request to the IO ring
+// static void addScatterSend(io_uring* ring, int skfd, int reqID, sockaddr_in* servAddr, const char* msg, size_t len, unsigned char flags, unsigned int num_pks) {
+//     // Send the message to itself
+//     sg_msg_t scatter_msg;
+//     memset(&scatter_msg, 0, sizeof(sg_msg_t));
+//     scatter_msg.hdr.req_id = reqID;
+//     scatter_msg.hdr.msg_type = SCATTER_MSG;
+//     scatter_msg.hdr.body_len = std::min(len, BODY_LEN);
+//     scatter_msg.hdr.num_pks = num_pks; 
+//     scatter_msg.hdr.flags = flags;
+//     strncpy(scatter_msg.body, msg, scatter_msg.hdr.body_len);
 
-    // this auxilary struct is needed for the sendmsg io_uring operation
-    struct iovec iov = {
-		.iov_base = &scatter_msg,
-		.iov_len = sizeof(sg_msg_t),
-	};
+//     // this auxilary struct is needed for the sendmsg io_uring operation
+//     struct iovec iov = {
+// 		.iov_base = &scatter_msg,
+// 		.iov_len = sizeof(sg_msg_t),
+// 	};
 
-	struct msghdr msgh;
-    memset(&msgh, 0, sizeof(msgh));
-	msgh.msg_name = servAddr;
-	msgh.msg_namelen = sizeof(sockaddr_in);
-	msgh.msg_iov = &iov;
-	msgh.msg_iovlen = 1;
+// 	struct msghdr msgh;
+//     memset(&msgh, 0, sizeof(msgh));
+// 	msgh.msg_name = servAddr;
+// 	msgh.msg_namelen = sizeof(sockaddr_in);
+// 	msgh.msg_iov = &iov;
+// 	msgh.msg_iovlen = 1;
 
-    // if we can't get this scatterSend crap to work, add some logic in TC
-    // which just sets the IP and port number...
+//     // if we can't get this scatterSend crap to work, add some logic in TC
+//     // which just sets the IP and port number...
 
-    io_uring_sqe *sqe = io_uring_get_sqe(ring);
-    io_uring_prep_sendmsg(sqe, skfd, &msgh, 0);
-    io_uring_sqe_set_flags(sqe, 0);
-}
+//     io_uring_sqe *sqe = io_uring_get_sqe(ring);
+//     io_uring_prep_sendmsg(sqe, skfd, &msgh, 0);
+//     io_uring_sqe_set_flags(sqe, 0);
+// }
 
 
 // Open a socket for a worker, returning the FD and port number
@@ -97,7 +97,7 @@ Service::Service(Context& ctx,
                  const std::vector<Worker>& workers) 
     : d_ctx{ctx}
     , d_workers{workers}
-    , d_ioCtx{2048}
+    , d_ioCtx{2048} // TODO specify... in relation with num socks and num msgs
 {
     d_activeRequests.reserve(MAX_ACTIVE_REQUESTS_ALLOWED);
 
@@ -107,10 +107,11 @@ Service::Service(Context& ctx,
         throw std::invalid_argument{"Exceeded max number of workers allowed"};
 
     // Configure the worker sockets
-    // TODO Maybe this can even be done in the Worker class itself?, to avoid setters
+    int workerFds[MAX_SOCKETS_ALLOWED];
     for (auto i = 0u; i < d_workers.size(); ++i) {
         const auto [ workerSkFd, workerLocalPort ] = openWorkerSocket();
         d_workers[i].setSocketFd(workerSkFd);
+        workerFds[i] = workerSkFd;
 
         worker_info_t wi = {
             .worker_ip = d_workers[i].ipAddressNet(),
@@ -122,6 +123,7 @@ Service::Service(Context& ctx,
         const worker_resp_status_t resp_status = WAITING_FOR_RESPONSE;
         d_ctx.workersHashMap().update(&wi, &resp_status);
     }
+    io_uring_register_files(&d_ioCtx.ring, workerFds, d_workers.size());
 
     // Configure the gather-control socket
     d_ctrlSkFd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);  
@@ -205,21 +207,49 @@ Request* Service::scatter(const char* msg, size_t len, ReqParams params)
     // as a pointer into the buffer to read the packet contents.
     req->registerBuffers(&d_ioCtx.ring);
 
-    // Note the pointers to the message buffers (including the sockaddrs) need
-    // be allocated outside of the loop, because io_uring does not consume the SQEs
-    // until the io_uring_submit() call outside of the loop. Otherwise it reuses
-    // the last pointer on the stack for each SQE.
+    // Prepare msg to configure the eBPF state for this request
     sg_msg_t scatter_msg;
     memset(&scatter_msg, 0, sizeof(sg_msg_t));
     scatter_msg.hdr.req_id = reqId;
     scatter_msg.hdr.msg_type = SCATTER_MSG;
-    scatter_msg.hdr.body_len = std::min(len, BODY_LEN);
     scatter_msg.hdr.num_pks = num_pks; 
     scatter_msg.hdr.flags = msgFlags;
-    strncpy(scatter_msg.body, msg, scatter_msg.hdr.body_len);
+
+    struct iovec iov_s = {
+		.iov_base = &scatter_msg,
+		.iov_len = sizeof(sg_msg_t),
+	};
+
+	struct msghdr msgh_s;
+    memset(&msgh_s, 0, sizeof(msgh_s));
+	msgh_s.msg_name = &d_scatterSkAddr;
+	msgh_s.msg_namelen = sizeof(sockaddr_in);
+	msgh_s.msg_iov = &iov_s;
+	msgh_s.msg_iovlen = 1;
+
+    io_uring_sqe *sqe = io_uring_get_sqe(&d_ioCtx.ring);
+    io_uring_prep_sendmsg(sqe, d_scatterSkFd, &msgh_s, 0);
+    io_uring_sqe_set_flags(sqe, 0);
+    sqe->flags |= IOSQE_IO_LINK;    // force this operation to be completed first
+    // this is important because io_uring may execute the operations on the SQ
+    // in any order
+
+
+    // Note the pointers to the message buffers (including the sockaddrs) need
+    // be allocated outside of the loop, because io_uring does not consume the SQEs
+    // until the io_uring_submit() call outside of the loop. Otherwise it reuses
+    // the last pointer on the stack for each SQE.
+    sg_msg_t worker_msg;
+    memset(&worker_msg, 0, sizeof(sg_msg_t));
+    worker_msg.hdr.req_id = reqId;
+    worker_msg.hdr.msg_type = SCATTER_MSG;
+    worker_msg.hdr.body_len = std::min(len, BODY_LEN);
+    // worker_msg.hdr.num_pks = num_pks; 
+    // worker_msg.hdr.flags = msgFlags;
+    strncpy(worker_msg.body, msg, worker_msg.hdr.body_len);
 
     struct iovec iov = {
-		.iov_base = &scatter_msg,
+		.iov_base = &worker_msg,
 		.iov_len = sizeof(sg_msg_t),
 	};
 
@@ -231,15 +261,16 @@ Request* Service::scatter(const char* msg, size_t len, ReqParams params)
         scatterMsgs[i].msg_iov = &iov;
         scatterMsgs[i].msg_iovlen = 1;
 
+        // we can just send the msg through the scatter socket...
+        // and in conn_info, use some worker ID instead of the FD
+
         io_uring_sqe *sqe = io_uring_get_sqe(&d_ioCtx.ring);
         io_uring_prep_sendmsg(sqe, d_workers[i].socketFd(), &scatterMsgs[i], 0);
         io_uring_sqe_set_flags(sqe, 0);
+        sqe->flags |= IOSQE_IO_LINK;    // needed so config msg is executed first
     }
     // this is scattering correctly
     // need to look into whether the pks are being processed
-
-    // NOTE: we probably still need to write into the scatter sk to set the completion
-    // policy
 
     for (auto& w : d_workers) {
         for (auto i = 0u; i < params.numPksPerRespMsg; i++) {
@@ -318,25 +349,30 @@ void Service::processPendingEvents(int requestID) {
                 std::cout << "[DEBUG] Request " << req.id() << " is ready" << std::endl;
                 #endif
                 req.d_status = Request::Status::Ready;
+                continue;
             }
 
             // check for multi-packet message and add more reads if necessary
             if (req.d_expectedPacketsPerMessage != resp->hdr.num_pks && resp->hdr.num_pks > 1) {
-                req.d_expectedPacketsPerMessage = resp->hdr.num_pks;                       
-            }
+                req.d_expectedPacketsPerMessage = resp->hdr.num_pks;
 
-            int remaining = 0;
-            for (const auto& [wfd, ptrs] : req.d_workerBufferPtrs) {
-                auto pksRemainingForThisWorker = abs(req.d_expectedPacketsPerMessage - ptrs.size());
-                if (pksRemainingForThisWorker > 0) {
-                    remaining += pksRemainingForThisWorker;
+                int remaining = 0;
+                for (const auto& [wfd, ptrs] : req.d_workerBufferPtrs) {
+                    auto pksRemainingForThisWorker = abs(req.d_expectedPacketsPerMessage - ptrs.size());
+                    if (pksRemainingForThisWorker > 0) {
+                        remaining += pksRemainingForThisWorker;
 
-                    // Add the remaining socket read operations to the SQ
-                    for (auto i = 0; i < pksRemainingForThisWorker; i++)
-                        addSocketRead(&d_ioCtx.ring, wfd, req.id(), Request::MaxBufferSize, IOSQE_BUFFER_SELECT);
+                        // Add the remaining socket read operations to the SQ
+                        for (auto i = 0; i < pksRemainingForThisWorker; i++)
+                            addSocketRead(&d_ioCtx.ring, wfd, req.id(), Request::MaxBufferSize, IOSQE_BUFFER_SELECT);
+                    }
                 }
+                submitPendingReads = (remaining > 0);
+                // if (submitPendingReads) {
+                //     std::cout << "remaining: " << remaining << std::endl;
+                //     std::cout << "req " << req.id() << " has num_pks = " << resp->hdr.num_pks << std::endl;
+                // }          
             }
-            submitPendingReads = (remaining > 0);
         }
     }
     io_uring_cq_advance(&d_ioCtx.ring, count);

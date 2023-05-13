@@ -159,28 +159,30 @@ int scatter_prog(struct __sk_buff* skb) {
 
     ////////////////////// NEW ////////////////////////////
 
-    __u32 payload_size = bpf_ntohs(udph->len) - sizeof(struct udphdr);
-    char* payload = (char*) udph + sizeof(struct udphdr);
+    // __u32 payload_size = bpf_ntohs(udph->len) - sizeof(struct udphdr);
+    // char* payload = (char*) udph + sizeof(struct udphdr);
 
-    // Note: this equality is needed so that the comparison size is known
-    // at compile-time for the loop unrolling.
-    if (payload_size != sizeof(sg_msg_t)) {
-        return TC_ACT_OK;
-    }
+    // // Note: this equality is needed so that the comparison size is known
+    // // at compile-time for the loop unrolling.
+    // if (payload_size != sizeof(sg_msg_t)) {
+    //     return TC_ACT_OK;
+    // }
 
-    if (UNLIKELY( (void*) payload + payload_size > data_end )) {
-        // data_end - data = MTU size + ETH_HDR (14 bytes)
-        bpf_printk("Invalid packet size: payload might be larger than MTU?");
-        return TC_ACT_OK;
-    }
+    // if (UNLIKELY( (void*) payload + payload_size > data_end )) {
+    //     // data_end - data = MTU size + ETH_HDR (14 bytes)
+    //     bpf_printk("Invalid packet size: payload might be larger than MTU?");
+    //     return TC_ACT_OK;
+    // }
 
-    sg_msg_t* sgh = (sg_msg_t*) payload; 
-    if (UNLIKELY( sgh->hdr.msg_type != SCATTER_MSG ))
-        return TC_ACT_OK;
+    // sg_msg_t* sgh = (sg_msg_t*) payload; 
+    // if (UNLIKELY( sgh->hdr.msg_type != SCATTER_MSG ))
+    //     return TC_ACT_OK;
+    
+    // #ifdef BPF_DEBUG_PRINT
+    // bpf_printk("sending packet to %d", bpf_ntohs(udph->dest));
+    // #endif
 
-    bpf_printk("sending packet to %d", bpf_ntohs(udph->dest));
-
-    return TC_ACT_OK;
+    // return TC_ACT_OK;
     ///////////////////////////////////////////////////////
 
     // view logs: sudo cat /sys/kernel/debug/tracing/trace_pipe
@@ -250,10 +252,10 @@ int scatter_prog(struct __sk_buff* skb) {
         #endif
 
         // Clone the outgoing packet to all the registered workers
-        struct send_worker_ctx data = {
-            .skb = skb,
-        };
-        bpf_for_each_map_elem(&map_workers, send_worker, &data, 0);
+        // struct send_worker_ctx data = {
+        //     .skb = skb,
+        // };
+        // bpf_for_each_map_elem(&map_workers, send_worker, &data, 0);
 
 #ifdef BPF_DEBUG_PRINT
         bpf_printk("Finished SCATTER request");

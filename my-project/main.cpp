@@ -113,7 +113,7 @@ int main(int argc, char** argv) {
     // looks like workers ARE NOT sending data back? maybe they crashed?
 
     // std::cout << "sent scatter request" << std::endl;
-    for (auto i = 0u; i < 3; i++) {
+    for (auto i = 0u; i < 5; i++) {
         auto req = service.scatter("SCATTER", 8, params);
 
         sg_msg_t buf;
@@ -122,7 +122,7 @@ int main(int argc, char** argv) {
         assert(buf.hdr.req_id == req->id());
 
         // while (req->bufferPointers().size() != params.numWorkersToWait)
-        service.processEvents(req->id());
+        service.processEvents();
         
         auto aggregatedData = (uint32_t*)(buf.body);
         // std::cout << "control socket packet received\n";
@@ -139,11 +139,7 @@ int main(int argc, char** argv) {
         //     std::cout << "NUM PKS MISMATCH on REQ " << i << " - Got " << req->bufferPointers().size() << " instead of " << params.numWorkersToWait << std::endl;
         //     throw;
         // }
-
-        // std::cout << "vec[" << 300 << "] = " << aggregatedData[300] << std::endl;
-        // std::cout << "Got a total of " << req->bufferPointers().size() << std::endl;
-
-        service.freeRequest(req);
+        // service.freeRequest(req);
     }
     
 }

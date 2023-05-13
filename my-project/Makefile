@@ -27,8 +27,13 @@ deinstall:
 	make --directory=$(LIBSGBPF_DIR) clean
 
 
+CC := g++
+CFLAGS := -std=c++17 -O2 -g -Wall
+# Note: must be in this order, otherwise it fails (and must be at the end of command)
+LDFLAGS := -L$(LIBSGBPF_LIB_DIR) -L$(LIBBPF_LIB_DIR) -lsgbpf -lbpf -luring
+INC := -I$(LIBSGBPF_HEADERS) -I$(LIBBPF_HEADERS)
 $(SG_PROGRAM): main.cpp
-	g++ -fsanitize=address -std=c++17 -I$(LIBSGBPF_HEADERS) -I$(LIBBPF_HEADERS) -L$(LIBSGBPF_LIB_DIR) -L$(LIBBPF_LIB_DIR) -g -Wall $^ -o $@ -lbpf -lsgbpf -luring
+	$(CC) $(CFLAGS) $(INC) $^ -o $@ $(LDFLAGS)
 
 clean:
 	rm -f *.o *.s

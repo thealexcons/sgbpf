@@ -6,12 +6,13 @@
 
 #include <net/if.h>
 #include <unistd.h>
+#include <sys/epoll.h> 
 
-#include "sgbpf/Worker.h"
-#include "sgbpf/Context.h"
-#include "sgbpf/Request.h"
-#include "sgbpf/Service.h"
-#include "sgbpf/Common.h"
+#include <sgbpf/Worker.h>
+#include <sgbpf/Context.h>
+#include <sgbpf/Request.h>
+#include <sgbpf/Service.h>
+#include <sgbpf/Common.h>
 
 class BenchmarkTimer {
 public:
@@ -76,24 +77,46 @@ int main(int argc, char** argv) {
     auto workers = sgbpf::Worker::fromFile("workers.cfg");
     sgbpf::Service service{ctx, workers};
     
+    // int flags = fcntl(sg.ctrlSkFd(), F_GETFL, 0);
+    // fcntl(service.ctrlSkFd(), F_SETFL, flags | O_NONBLOCK);
+
+    // Use epoll to read from ctrl sk
+    // int epollFd = epoll_create1(0);
+    // epoll_event ev;
+    // ev.events = EPOLLIN;
+    // ev.data.fd = service.ctrlSkFd();
+    // assert(epoll_ctl(epollFd, EPOLL_CTL_ADD, 0, &ev) == 0);
+
     // EXAMPLE 1: Vector-based data (with in-kernel aggregation)
     sgbpf::ReqParams params; // set params here....
-    params.completionPolicy = sgbpf::GatherCompletionPolicy::WaitN;
+    params.completionPolicy = sgbpf::GatherCompletionPolicy::WaitAny;
     params.numWorkersToWait = 10;
     params.timeout = std::chrono::microseconds{100*1000}; // 10 ms
     
+    constexpr int reqs = 1024;
     // std::vector<uint64_t> times;
-    // times.reserve(100);
-    // for (auto i = 0u; i < 100; i++) {
-    //     BenchmarkTimer t{times};
-    //     auto req = service.scatter("SCATTER", 8, params);
-    //     sg_msg_t buf;
-    //     auto b = read(service.ctrlSkFd(), &buf, sizeof(sg_msg_t));
-    //     assert(b == sizeof(sg_msg_t));
-    //     assert(buf.hdr.req_id == req->id());
-    //     service.processEvents();
-    //     // std::this_thread::sleep_for(std::chrono::microseconds{100});
-    // }
+    // times.reserve(reqs);
+    auto start = std::chrono::high_resolution_clock::now();
+    for (auto i = 0u; i < reqs; i++) {
+        // BenchmarkTimer t{times};
+        auto req = service.scatter("SCATTER", 8, params);
+
+        sg_msg_t buf;
+        // epoll_event event;
+        // alternative is to wait on req->isReady() ??
+        // int eventCount = epoll_wait(epollFd, &event, 1, -1);
+        // assert(eventCount == 1);
+        auto b = read(service.ctrlSkFd(), &buf, sizeof(sg_msg_t));
+        assert(b == sizeof(sg_msg_t));
+        assert(buf.hdr.req_id == req->id());
+
+        service.processEvents(req->id());
+    }
+    auto end_time = std::chrono::high_resolution_clock::now();
+    auto elapsed_time = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start);
+
+    std::cout << "Total elapsed time (us) = " << elapsed_time.count() << '\n';
+    // std::cout << "Avg throughput (req/s) = " << reqs / (std::chrono::duration_cast<std::chrono::seconds>(elapsed_time).count()) << std::endl;
 
     // std::cout << "Max E2E latency (us) = " << BenchmarkTimer::maxTime(times) << std::endl;
     // std::cout << "Min E2E latency (us) = " << BenchmarkTimer::minTime(times) << std::endl;
@@ -113,37 +136,33 @@ int main(int argc, char** argv) {
     // looks like workers ARE NOT sending data back? maybe they crashed?
 
     // std::cout << "sent scatter request" << std::endl;
-    for (auto i = 0u; i < 500; i++) {
-        auto req = service.scatter("SCATTER", 8, params);
+    // for (auto i = 0u; i < 5; i++) {
+    //     auto req = service.scatter("SCATTER", 8, params);
 
-        sg_msg_t buf;
-        auto b = read(service.ctrlSkFd(), &buf, sizeof(sg_msg_t));
-        assert(b == sizeof(sg_msg_t));
-        assert(buf.hdr.req_id == req->id());
+    //     sg_msg_t buf;
+    //     auto b = read(service.ctrlSkFd(), &buf, sizeof(sg_msg_t));
+    //     assert(b == sizeof(sg_msg_t));
+    //     assert(buf.hdr.req_id == req->id());
 
-        // while (req->bufferPointers().size() != params.numWorkersToWait)
-        service.processEvents(req->id());
+    //     // while (req->bufferPointers().size() != params.numWorkersToWait)
+    //     service.processEvents();
         
-        auto aggregatedData = (uint32_t*)(buf.body);
-        // std::cout << "control socket packet received\n";
-        for (auto j = 0u; j < RESP_MAX_VECTOR_SIZE; j++) {
-            bool c = aggregatedData[j] == j * params.numWorkersToWait;
-            if(!c) {
-                std::cout << "DATA MISMATCH on REQ " << i << " - Got " << aggregatedData[j] << " at idx " << j << " instead of " << j * params.numWorkersToWait << std::endl;
-                throw;
-            }
-            // std::cout << "vec[" << i << "] = " << aggregatedData[i] << std::endl;
-        }
-        // bool c = req->bufferPointers().size() == params.numWorkersToWait;
-        // if(!c) {
-        //     std::cout << "NUM PKS MISMATCH on REQ " << i << " - Got " << req->bufferPointers().size() << " instead of " << params.numWorkersToWait << std::endl;
-        //     throw;
-        // }
-
-        // std::cout << "vec[" << 300 << "] = " << aggregatedData[300] << std::endl;
-        // std::cout << "Got a total of " << req->bufferPointers().size() << std::endl;
-
-        service.freeRequest(req);
-    }
+    //     auto aggregatedData = (uint32_t*)(buf.body);
+    //     // std::cout << "control socket packet received\n";
+    //     for (auto j = 0u; j < RESP_MAX_VECTOR_SIZE; j++) {
+    //         bool c = aggregatedData[j] == j * params.numWorkersToWait;
+    //         if(!c) {
+    //             std::cout << "DATA MISMATCH on REQ " << i << " - Got " << aggregatedData[j] << " at idx " << j << " instead of " << j * params.numWorkersToWait << std::endl;
+    //             throw;
+    //         }
+    //         // std::cout << "vec[" << i << "] = " << aggregatedData[i] << std::endl;
+    //     }
+    //     // bool c = req->bufferPointers().size() == params.numWorkersToWait;
+    //     // if(!c) {
+    //     //     std::cout << "NUM PKS MISMATCH on REQ " << i << " - Got " << req->bufferPointers().size() << " instead of " << params.numWorkersToWait << std::endl;
+    //     //     throw;
+    //     // }
+    //     // service.freeRequest(req);
+    // }
     
 }

@@ -9,7 +9,7 @@
 
 #define MTU_SIZE 1500
 #define MAX_SOCKETS_ALLOWED 8192
-#define MAX_ACTIVE_REQUESTS_ALLOWED 1024
+#define MAX_ACTIVE_REQUESTS_ALLOWED 8192
 
 typedef enum worker_resp_status
 {

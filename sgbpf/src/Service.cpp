@@ -112,11 +112,12 @@ Service::Service(Context& ctx,
         throw std::invalid_argument{"Exceeded max number of workers allowed"};
 
     // Configure the worker sockets
-    // TODO Maybe this can even be done in the Worker class itself?, to avoid setters
+    int workerFds[MAX_SOCKETS_ALLOWED];
     for (auto i = 0u; i < d_workers.size(); ++i) {
         const auto [ workerSkFd, workerLocalPort ] = openWorkerSocket();
         d_workers[i].setSocketFd(workerSkFd);
-
+        workerFds[i] = workerSkFd;
+        
         worker_info_t wi = {
             .worker_ip = d_workers[i].ipAddressNet(),
             .worker_port = d_workers[i].portNet(),
@@ -127,7 +128,8 @@ Service::Service(Context& ctx,
         const worker_resp_status_t resp_status = WAITING_FOR_RESPONSE;
         d_ctx.workersHashMap().update(&wi, &resp_status);
     }
-
+    io_uring_register_files(&d_ioCtx.ring, workerFds, d_workers.size());
+    
     // Configure the gather-control socket
     d_ctrlSkFd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);  
     if (d_ctrlSkFd < 0)

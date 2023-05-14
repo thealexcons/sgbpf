@@ -78,22 +78,32 @@ int main(int argc, char** argv) {
     
     // EXAMPLE 1: Vector-based data (with in-kernel aggregation)
     sgbpf::ReqParams params; // set params here....
-    params.completionPolicy = sgbpf::GatherCompletionPolicy::WaitN;
-    params.numWorkersToWait = 10;
+    params.completionPolicy = sgbpf::GatherCompletionPolicy::WaitAny;
+    params.numWorkersToWait = 1;
     params.timeout = std::chrono::microseconds{100*1000}; // 10 ms
     
+    constexpr int reqs = 1024;
     // std::vector<uint64_t> times;
-    // times.reserve(100);
-    // for (auto i = 0u; i < 100; i++) {
-    //     BenchmarkTimer t{times};
-    //     auto req = service.scatter("SCATTER", 8, params);
-    //     sg_msg_t buf;
-    //     auto b = read(service.ctrlSkFd(), &buf, sizeof(sg_msg_t));
-    //     assert(b == sizeof(sg_msg_t));
-    //     assert(buf.hdr.req_id == req->id());
-    //     service.processEvents();
-    //     // std::this_thread::sleep_for(std::chrono::microseconds{100});
-    // }
+    // times.reserve(reqs);
+    auto start = std::chrono::high_resolution_clock::now();
+    for (auto i = 0u; i < reqs; i++) {
+        // BenchmarkTimer t{times};
+        auto req = service.scatter("SCATTER", 8, params);
+
+        sg_msg_t buf;
+        // epoll_event event;
+        // alternative is to wait on req->isReady() ??
+        // int eventCount = epoll_wait(epollFd, &event, 1, -1);
+        // assert(eventCount == 1);
+        auto b = read(service.ctrlSkFd(), &buf, sizeof(sg_msg_t));
+        assert(b == sizeof(sg_msg_t));
+        assert(buf.hdr.req_id == req->id());
+
+        service.processEvents(req->id());
+    }
+    auto end_time = std::chrono::high_resolution_clock::now();
+    auto elapsed_time = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start);
+    std::cout << elapsed_time.count() << std::endl;
 
     // std::cout << "Max E2E latency (us) = " << BenchmarkTimer::maxTime(times) << std::endl;
     // std::cout << "Min E2E latency (us) = " << BenchmarkTimer::minTime(times) << std::endl;
@@ -113,33 +123,33 @@ int main(int argc, char** argv) {
     // looks like workers ARE NOT sending data back? maybe they crashed?
 
     // std::cout << "sent scatter request" << std::endl;
-    for (auto i = 0u; i < 5; i++) {
-        auto req = service.scatter("SCATTER", 8, params);
+    // for (auto i = 0u; i < 5; i++) {
+    //     auto req = service.scatter("SCATTER", 8, params);
 
-        sg_msg_t buf;
-        auto b = read(service.ctrlSkFd(), &buf, sizeof(sg_msg_t));
-        assert(b == sizeof(sg_msg_t));
-        assert(buf.hdr.req_id == req->id());
+    //     sg_msg_t buf;
+    //     auto b = read(service.ctrlSkFd(), &buf, sizeof(sg_msg_t));
+    //     assert(b == sizeof(sg_msg_t));
+    //     assert(buf.hdr.req_id == req->id());
 
-        // while (req->bufferPointers().size() != params.numWorkersToWait)
-        service.processEvents();
+    //     // while (req->bufferPointers().size() != params.numWorkersToWait)
+    //     service.processEvents();
         
-        auto aggregatedData = (uint32_t*)(buf.body);
-        // std::cout << "control socket packet received\n";
-        for (auto j = 0u; j < RESP_MAX_VECTOR_SIZE; j++) {
-            bool c = aggregatedData[j] == j * params.numWorkersToWait;
-            if(!c) {
-                std::cout << "DATA MISMATCH on REQ " << i << " - Got " << aggregatedData[j] << " at idx " << j << " instead of " << j * params.numWorkersToWait << std::endl;
-                throw;
-            }
-            // std::cout << "vec[" << i << "] = " << aggregatedData[i] << std::endl;
-        }
-        // bool c = req->bufferPointers().size() == params.numWorkersToWait;
-        // if(!c) {
-        //     std::cout << "NUM PKS MISMATCH on REQ " << i << " - Got " << req->bufferPointers().size() << " instead of " << params.numWorkersToWait << std::endl;
-        //     throw;
-        // }
-        // service.freeRequest(req);
-    }
+    //     auto aggregatedData = (uint32_t*)(buf.body);
+    //     // std::cout << "control socket packet received\n";
+    //     for (auto j = 0u; j < RESP_MAX_VECTOR_SIZE; j++) {
+    //         bool c = aggregatedData[j] == j * params.numWorkersToWait;
+    //         if(!c) {
+    //             std::cout << "DATA MISMATCH on REQ " << i << " - Got " << aggregatedData[j] << " at idx " << j << " instead of " << j * params.numWorkersToWait << std::endl;
+    //             throw;
+    //         }
+    //         // std::cout << "vec[" << i << "] = " << aggregatedData[i] << std::endl;
+    //     }
+    //     // bool c = req->bufferPointers().size() == params.numWorkersToWait;
+    //     // if(!c) {
+    //     //     std::cout << "NUM PKS MISMATCH on REQ " << i << " - Got " << req->bufferPointers().size() << " instead of " << params.numWorkersToWait << std::endl;
+    //     //     throw;
+    //     // }
+    //     // service.freeRequest(req);
+    // }
     
 }

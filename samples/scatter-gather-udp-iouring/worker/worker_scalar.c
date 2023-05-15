@@ -8,12 +8,20 @@
 #include <fcntl.h>
 #include <string.h>
 #include <stdlib.h>
+#include <signal.h>
 
 #define WORKER_PORT 5555
 
 #include "../common.h"
 
+void sig_handler(int signum){
+  fflush(stdout);
+  exit(1);
+}
+
 int main(int argc, char *argv[]) {
+
+  signal(SIGPOLL, sig_handler); // Register signal handler
 
   short worker_port = WORKER_PORT;
   if (argc >= 2)

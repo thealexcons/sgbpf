@@ -32,5 +32,8 @@ procs = [
 time.sleep(aliveTime)
 
 for p in procs:
-    p.terminate()
-
+    p.send_signal(signal.SIGPOLL)
+    stdout, stderr = p.communicate()
+    print(stdout)
+    print("RET CODE =", p.returncode)
+    # p.terminate()

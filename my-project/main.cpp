@@ -93,7 +93,7 @@ int main(int argc, char** argv) {
     params.numWorkersToWait = 10;
     params.timeout = std::chrono::microseconds{100*1000}; // 10 ms
     
-    constexpr int reqs = 1024;
+    constexpr int reqs = 1;
     // std::vector<uint64_t> times;
     // times.reserve(reqs);
     auto start = std::chrono::high_resolution_clock::now();
@@ -118,6 +118,10 @@ int main(int argc, char** argv) {
     std::cout << "Total elapsed time (us) = " << elapsed_time.count() << '\n';
     // std::cout << "Avg throughput (req/s) = " << reqs / (std::chrono::duration_cast<std::chrono::seconds>(elapsed_time).count()) << std::endl;
 
+    // while (1) {
+    //     std::this_thread::yield();
+    // }
+
     // std::cout << "Max E2E latency (us) = " << BenchmarkTimer::maxTime(times) << std::endl;
     // std::cout << "Min E2E latency (us) = " << BenchmarkTimer::minTime(times) << std::endl;
     // std::cout << "Avg E2E latency (us) = " << BenchmarkTimer::avgTime(times) << std::endl;
@@ -134,6 +138,9 @@ int main(int argc, char** argv) {
     // WHEN SENDING MANY REQUESTS, AT SOME POINT IT LOOKS LIKE THEY GET STUCK
     // AROUND REQ 427.
     // looks like workers ARE NOT sending data back? maybe they crashed?
+
+    // FIX CRASHING SCRIPT ISSUE...
+
 
     // std::cout << "sent scatter request" << std::endl;
     // for (auto i = 0u; i < 5; i++) {

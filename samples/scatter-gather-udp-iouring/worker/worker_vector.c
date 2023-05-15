@@ -8,18 +8,27 @@
 #include <fcntl.h>
 #include <string.h>
 #include <stdlib.h>
+#include <signal.h>
+#include <errno.h>
 
 #define WORKER_PORT 5555
 
 #include "../common.h"
 
+void sig_handler(int signum){
+  fflush(stdout);
+  exit(0);
+}
+
 int main(int argc, char *argv[]) {
+
+  signal(SIGPOLL, sig_handler); // Register signal handler
 
   short worker_port = WORKER_PORT;
   if (argc >= 2)
     worker_port = atoi(argv[1]);
 
-  char message[1024];
+  // char message[1024];
   int sock;
   struct sockaddr_in name;
   int bytes;
@@ -30,7 +39,29 @@ int main(int argc, char *argv[]) {
     perror("Opening datagram socket");
     exit(1);
   }
+
+  socklen_t s = sizeof(int);
+  int x;
+  if (getsockopt(sock, SOL_SOCKET, SO_RCVBUF, &x, &s)) {
+      fprintf(stderr, "Error getsockopt(SO_RCVBUF): %s\n", strerror(errno));
+  } else {
+      fprintf(stdout, "Recv buf size set to %d\n", x);
+  }
+
+  int n = sizeof(sg_msg_t) * 4000;  // increase to 4k packets 
+  if (setsockopt(sock, SOL_SOCKET, SO_RCVBUFFORCE, &n, sizeof(n)) == -1) {
+    fprintf(stdout, "Failed on increasing receive buffer");
+    exit(1);  
+  }
+
+  int y;
+  if (getsockopt(sock, SOL_SOCKET, SO_RCVBUF, &y, &s)) {
+      fprintf(stderr, "Error getsockopt(SO_RCVBUF): %s\n", strerror(errno));
+  } else {
+      fprintf(stdout, "Recv buf size set to %d\n", y);
+  }
   
+
   /* Bind our local address so that the client can send to us */
   memset(&name, 0, sizeof(name));
   name.sin_family = AF_INET;
@@ -42,17 +73,27 @@ int main(int argc, char *argv[]) {
     exit(1);
   }
   
-  printf("Socket has port number %d\n", ntohs(name.sin_port));
+  printf("[WORKER %d] started------------------\n", worker_port);
 
   struct sockaddr_in client;
   socklen_t clientSize = sizeof(struct sockaddr_in);
 
+  char buf[sizeof(sg_msg_t)];
+  int totalBytes = 0;
   while(1) {
-    while ((bytes = recvfrom(sock, message, 1024, 0, (struct sockaddr *) &client, &clientSize)) > 0) {
-      sg_msg_t* msg = (sg_msg_t*) message;
+      bytes = recvfrom(sock, buf, sizeof(sg_msg_t), 0, (struct sockaddr *) &client, &clientSize);
+      if (bytes < 0) {
+          fprintf(stdout, "[WORKER %d] recvfrom() failed. Got return %d and errno = %d\n", 
+                          worker_port, bytes, errno);
+          fflush(stdout);
+          continue;
+      }
+      totalBytes += bytes;
 
-      fprintf(stdout, "\n\nrecv: '%s' with req ID %d from %d\n", 
-        (msg->hdr.msg_type == SCATTER_MSG ? "scatter msg" : "unknown"), msg->hdr.req_id, ntohs(client.sin_port));
+      // while ((bytes = recvfrom(sock, buf, sizeof(sg_msg_t), 0, (struct sockaddr *) &client, &clientSize)) > 0) {
+      sg_msg_t* msg = (sg_msg_t*) buf;
+
+      fprintf(stdout, "[WORKER %d] got req with ID %d (total bytes = %d)\n", worker_port, msg->hdr.req_id, totalBytes);
       fflush(stdout);
 
       // Vector example: send vector of increasing numbers
@@ -68,13 +109,15 @@ int main(int argc, char *argv[]) {
       }
       memmove(resp_msg.body, vec, resp_msg.hdr.body_len);
       if (sendto(sock, &resp_msg, sizeof(sg_msg_t), 0, (struct sockaddr *)&client, clientSize) < 0) {
-          perror("sendto()");
+          fprintf(stdout, "[WORKER %d] sendto() failed on req ID %d\n", worker_port, msg->hdr.req_id);
+          fflush(stdout);
           continue;
       }
 
-    }
+      fprintf(stdout, "[WORKER %d] sent response for req with ID %d\n", worker_port, resp_msg.hdr.req_id);
+      fflush(stdout);
   }
 
-  printf("Shutting down server\n");
+  fprintf(stdout, "[WORKER %d] shutting down", worker_port);
   close(sock);
 }

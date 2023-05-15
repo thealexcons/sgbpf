@@ -193,9 +193,8 @@ int scatter_prog(struct __sk_buff* skb) {
         __u32 slot = GET_REQ_MAP_SLOT(sgh->hdr.req_id);
 
         // Configure request settings from the provided flags (completion policy)
-        // bpf_printk("======================NEW REQ %d==============================", sgh->hdr.req_id);
         #ifdef BPF_DEBUG_PRINT
-        bpf_printk("Got SCATTER request");
+        bpf_printk("====================== GOT NEW REQ %d==============================", sgh->hdr.req_id);
         #endif
 
         // Reset count (NOTE: this must go here, NOT in the ctrl sk notification)
@@ -279,6 +278,10 @@ int gather_prog(struct xdp_md* ctx) {
     sg_msg_t* resp_msg = (sg_msg_t*) payload;
     if (UNLIKELY( resp_msg->hdr.msg_type != GATHER_MSG ))
         return XDP_DROP;
+
+    #ifdef BPF_DEBUG_PRINT
+    bpf_printk("got to gather XDP Prog with resp from worker %d", bpf_ntohs(worker.worker_port));
+    #endif
 
     // If this is a multi-packet message, forward the packet without aggregation
     if (resp_msg->hdr.num_pks > 1 && resp_msg->hdr.seq_num <= resp_msg->hdr.num_pks) {

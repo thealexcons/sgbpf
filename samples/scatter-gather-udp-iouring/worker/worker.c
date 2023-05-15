@@ -8,12 +8,21 @@
 #include <fcntl.h>
 #include <string.h>
 #include <stdlib.h>
+#include <signal.h>
+
+void sig_handler(int signum){
+  fflush(stdout);
+  exit(1);
+}
+
 
 #define WORKER_PORT 5555
 
 #include "../common.h"
 
 int main(int argc, char *argv[]) {
+
+  signal(SIGPOLL, sig_handler); // Register signal handler
 
   short worker_port = WORKER_PORT;
   if (argc >= 2)
@@ -43,6 +52,7 @@ int main(int argc, char *argv[]) {
   }
   
   printf("Socket has port number %d\n", ntohs(name.sin_port));
+  fflush(stdout);
   
   // struct sockaddr_in server;
   // /* Set up the server name */
@@ -60,6 +70,7 @@ int main(int argc, char *argv[]) {
 
       printf("\n\nrecv: '%s' with req ID %d from %d\n", 
         (msg->hdr.msg_type == SCATTER_MSG ? "scatter msg" : "unknown"), msg->hdr.req_id, ntohs(client.sin_port));
+      fflush(stdout);
 
       /* Send the message in buf to the server */
 
@@ -109,5 +120,6 @@ int main(int argc, char *argv[]) {
   }
 
   printf("Shutting down server\n");
+  fflush(stdout);
   close(sock);
 }

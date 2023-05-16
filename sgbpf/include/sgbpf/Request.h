@@ -41,8 +41,10 @@ class Request
     // Manages the state and execution of a scatter gather request. Each invocation
     // of the scatter gather primitive creates an instance of this class.
 public:
-    constexpr static const auto NumBuffers    = 1024;
-    constexpr static const auto MaxBufferSize = sizeof(sg_msg_t);
+    constexpr static const auto MaxNumPksPerResponse = 8;
+    constexpr static const auto MaxNumWorkers        = 4096;
+    constexpr static const auto NumBuffers           = 1024; //MaxNumPksPerResponse * MaxNumWorkers;
+    constexpr static const auto MaxBufferSize        = sizeof(sg_msg_t);
 
     enum class Status {
         Waiting,
@@ -65,9 +67,9 @@ private:
     
     std::chrono::time_point<std::chrono::steady_clock> d_startTime;
 
-    // TODO num buffers should be the max number of packets for an entire request
-    // = max num packets per response * max num workers
-    char d_buffers[NumBuffers][MaxBufferSize] = {0};
+    // TODO seems like NumBuffers affect request latency...
+    // make Request a template class Request<NumBufs> ??
+    char d_buffers[NumBuffers][MaxBufferSize];
 
     // todo make the key Worker type, instead of the fd
     std::unordered_map<int, std::vector<int>> d_workerBufferPtrs;

@@ -71,17 +71,6 @@ struct IOUringContext
 
         if (io_uring_queue_init_params(numEntries, &ring, &params) < 0)
             throw std::runtime_error{"Failed to initialise io_uring queue"}; 
-
-        // // Register packet buffers for buffer selection 
-        // io_uring_sqe* sqe = io_uring_get_sqe(&ring);
-        // io_uring_prep_provide_buffers(sqe, buffers, MaxBufferSize, NumBuffers, BufferGroupID, 0);
-        // io_uring_submit(&ring);
-        
-        // io_uring_cqe* cqe;
-        // io_uring_wait_cqe(&ring, &cqe);
-        // if (cqe->res < 0)
-        //     throw std::runtime_error{"Failed to provide buffers during io_uring setup"};
-        // io_uring_cqe_seen(&ring, cqe);
     }
 
     ~IOUringContext() {

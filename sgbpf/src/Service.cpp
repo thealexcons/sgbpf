@@ -34,33 +34,9 @@ inline void addSocketRead(io_uring *ring, int fd, unsigned gid, size_t message_s
 
 
 // Add a scatter send request to the IO ring
-inline void addScatterSend(io_uring* ring, int skfd, int reqID, sockaddr_in* servAddr, const char* msg, size_t len, unsigned char flags, unsigned int num_pks) {
-    // Send the message to itself
-    sg_msg_t scatter_msg;
-    memset(&scatter_msg, 0, sizeof(sg_msg_t));
-    scatter_msg.hdr.req_id = reqID;
-    scatter_msg.hdr.msg_type = SCATTER_MSG;
-    scatter_msg.hdr.body_len = std::min(len, BODY_LEN);
-    scatter_msg.hdr.num_pks = num_pks; 
-    scatter_msg.hdr.flags = flags;
-    strncpy(scatter_msg.body, msg, scatter_msg.hdr.body_len);
-
-    // this auxilary struct is needed for the sendmsg io_uring operation
-    struct iovec iov = {
-		.iov_base = &scatter_msg,
-		.iov_len = sizeof(sg_msg_t),
-	};
-
-	struct msghdr msgh;
-    memset(&msgh, 0, sizeof(msgh));
-	msgh.msg_name = servAddr;
-	msgh.msg_namelen = sizeof(sockaddr_in);
-	msgh.msg_iov = &iov;
-	msgh.msg_iovlen = 1;
-
-    // TODO look into sendmsg_zc (zero-copy), might be TCP only though...
+inline void addScatterSend(io_uring* ring, int skfd, const msghdr* msgh) {
     io_uring_sqe *sqe = io_uring_get_sqe(ring);
-    io_uring_prep_sendmsg(sqe, skfd, &msgh, 0);
+    io_uring_prep_sendmsg(sqe, skfd, msgh, 0);
     io_uring_sqe_set_flags(sqe, 0);
 
     conn_info_t conn_i = {
@@ -105,8 +81,6 @@ Service::Service(Context& ctx,
     , d_ioCtx{2048}
 {
     d_activeRequests.reserve(MAX_ACTIVE_REQUESTS_ALLOWED);
-
-    d_ctx.setScatterPort(PORT);
 
     if (d_workers.size() > MAX_SOCKETS_ALLOWED)
         throw std::invalid_argument{"Exceeded max number of workers allowed"};
@@ -158,6 +132,8 @@ Service::Service(Context& ctx,
     d_scatterSkAddr.sin_addr.s_addr = INADDR_ANY;
     if (bind(d_scatterSkFd, (const struct sockaddr *) &d_scatterSkAddr, sizeof(sockaddr_in)) < 0)
         throw std::runtime_error{"Failed bind() on scatter socket"};
+
+    d_ctx.setScatterPort(PORT);
 }
 
 Service::~Service()
@@ -187,8 +163,6 @@ Request* Service::scatter(const char* msg, size_t len, ReqParams params)
     }
 
     int reqId = s_nextRequestID++;
-    // TODO: this can be a fixed size array because we have a limit
-    // on the maximum number of active requests
     d_activeRequests.emplace(std::piecewise_construct,
             std::forward_as_tuple(reqId),
             std::forward_as_tuple(reqId, d_workers, params)
@@ -212,7 +186,28 @@ Request* Service::scatter(const char* msg, size_t len, ReqParams params)
     // as a pointer into the buffer to read the packet contents.
     req->registerBuffers(&d_ioCtx.ring);
 
-    addScatterSend(&d_ioCtx.ring, d_scatterSkFd, reqId, &d_scatterSkAddr, msg, len, msgFlags, num_pks);
+    // Add IO operations to the ring and submit as batch to io_uring
+    sg_msg_t scatter_msg;
+    memset(&scatter_msg, 0, sizeof(sg_msg_t));
+    scatter_msg.hdr.req_id = reqId;
+    scatter_msg.hdr.msg_type = SCATTER_MSG;
+    scatter_msg.hdr.body_len = std::min(len, BODY_LEN);
+    scatter_msg.hdr.num_pks = num_pks; 
+    scatter_msg.hdr.flags = msgFlags;
+    strncpy(scatter_msg.body, msg, scatter_msg.hdr.body_len);
+
+    struct iovec iov = {
+		.iov_base = &scatter_msg,
+		.iov_len = sizeof(sg_msg_t),
+	};
+	struct msghdr msgh;
+    memset(&msgh, 0, sizeof(msgh));
+	msgh.msg_name = &d_scatterSkAddr;
+	msgh.msg_namelen = sizeof(sockaddr_in);
+	msgh.msg_iov = &iov;
+	msgh.msg_iovlen = 1;
+
+    addScatterSend(&d_ioCtx.ring, d_scatterSkFd, &msgh);
 
     for (auto w : d_workers) {
         for (auto i = 0u; i < params.numPksPerRespMsg; i++) {

@@ -58,7 +58,7 @@ public:
 private:
     // DATA MEMBERS
     int                     d_requestID;                    // The unique request ID
-    std::vector<Worker>     d_workers;
+    std::vector<Worker>*    d_workers;
     unsigned int            d_expectedPacketsPerMessage = 1;    // The number of expected packets per response message
     Status                  d_status;
     std::chrono::microseconds d_timeOut;
@@ -79,13 +79,13 @@ public:
     Request() = default;
 
     Request(int requestID, 
-            std::vector<Worker> workers, 
+            std::vector<Worker>* workers, 
             const ReqParams& params);
 
 
     int id() const { return d_requestID; }
 
-    const std::vector<Worker>& workers() const { return d_workers; }
+    const std::vector<Worker>& workers() const { return *d_workers; }
 
     const char* data(int packetIdx) const { return d_buffers[packetIdx]; }
 

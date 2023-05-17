@@ -80,42 +80,31 @@ int main(int argc, char** argv) {
     // int flags = fcntl(sg.ctrlSkFd(), F_GETFL, 0);
     // fcntl(service.ctrlSkFd(), F_SETFL, flags | O_NONBLOCK);
 
-    // Use epoll to read from ctrl sk
-    // int epollFd = epoll_create1(0);
-    // epoll_event ev;
-    // ev.events = EPOLLIN;
-    // ev.data.fd = service.ctrlSkFd();
-    // assert(epoll_ctl(epollFd, EPOLL_CTL_ADD, 0, &ev) == 0);
-
     // EXAMPLE 1: Vector-based data (with in-kernel aggregation)
     sgbpf::ReqParams params; // set params here....
     params.completionPolicy = sgbpf::GatherCompletionPolicy::WaitAny;
     params.numWorkersToWait = 10;
     params.timeout = std::chrono::microseconds{100*1000}; // 10 ms
     
-    constexpr int reqs = 1;
+    constexpr int reqs = 300;
     // std::vector<uint64_t> times;
     // times.reserve(reqs);
-    auto start = std::chrono::high_resolution_clock::now();
+    // auto start = std::chrono::high_resolution_clock::now();
     for (auto i = 0u; i < reqs; i++) {
         // BenchmarkTimer t{times};
         auto req = service.scatter("SCATTER", 8, params);
 
         sg_msg_t buf;
-        // epoll_event event;
-        // alternative is to wait on req->isReady() ??
-        // int eventCount = epoll_wait(epollFd, &event, 1, -1);
-        // assert(eventCount == 1);
         auto b = read(service.ctrlSkFd(), &buf, sizeof(sg_msg_t));
         assert(b == sizeof(sg_msg_t));
         assert(buf.hdr.req_id == req->id());
 
         service.processEvents(req->id());
     }
-    auto end_time = std::chrono::high_resolution_clock::now();
-    auto elapsed_time = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start);
+    // auto end_time = std::chrono::high_resolution_clock::now();
+    // auto elapsed_time = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start);
 
-    std::cout << "Total elapsed time (us) = " << elapsed_time.count() << '\n';
+    // std::cout << "Total elapsed time (us) = " << elapsed_time.count() << '\n';
     // std::cout << "Avg throughput (req/s) = " << reqs / (std::chrono::duration_cast<std::chrono::seconds>(elapsed_time).count()) << std::endl;
 
     // while (1) {

@@ -78,7 +78,8 @@ Service::Service(Context& ctx,
                  const std::vector<Worker>& workers) 
     : d_ctx{ctx}
     , d_workers{workers}
-    , d_ioCtx{2048}
+    , d_ioCtx{2048} // NOTE: these are CQ entries, so it doesn't have to be too big
+                    // assuming the user is calling processEvents() adequately
 {
     d_activeRequests.reserve(MAX_ACTIVE_REQUESTS_ALLOWED);
 
@@ -165,7 +166,7 @@ Request* Service::scatter(const char* msg, size_t len, ReqParams params)
     int reqId = s_nextRequestID++;
     d_activeRequests.emplace(std::piecewise_construct,
             std::forward_as_tuple(reqId),
-            std::forward_as_tuple(reqId, d_workers, params)
+            std::forward_as_tuple(reqId, &d_workers, params)
     );
 
     Request* req = &d_activeRequests[reqId];

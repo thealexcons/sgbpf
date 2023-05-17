@@ -4,7 +4,7 @@ namespace sgbpf
 {
 
 Request::Request(int requestID, 
-                 std::vector<Worker> workers, 
+                 std::vector<Worker>* workers, 
                  const ReqParams& params)
     : d_requestID{requestID}
     , d_workers{workers}
@@ -23,6 +23,10 @@ bool Request::hasTimedOut() const {
 }
 
 void Request::addBufferPtr(int workerFd, int ptr) {
+    auto& vec = d_workerBufferPtrs[workerFd];
+    if (__glibc_unlikely(vec.empty())) {
+        vec.reserve(d_expectedPacketsPerMessage);
+    }
     d_workerBufferPtrs[workerFd].push_back(ptr);
 }
 
@@ -32,7 +36,7 @@ void Request::startTimer() {
 
 bool Request::receivedSufficientPackets() const {
     if (d_completionPolicy == GatherCompletionPolicy::WaitAll) {
-        return receivedWaitN(d_workers.size());
+        return receivedWaitN(d_workers->size());
     }
     else if (d_completionPolicy == GatherCompletionPolicy::WaitN) {
         return receivedWaitN(d_numWorkersToWait);

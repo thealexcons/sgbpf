@@ -24,22 +24,7 @@ int aggregation_prog(struct xdp_md* xdp_ctx) {
 
     // ITEM LIST (IN ORDER OF PRIORITY):
 
-    // FIX MISSING PACKETS FOR N < WORKERS.SIZE()
-    // IO_URING DOES NOT SEEM TO BE GETTING ALL THE PACKETS FROM EBPF???
-
     // LOOK INTO PER SOCKET STORAGE FOR THE FUTURE WORK SECTION
-
-    // bpf prog: (note these have ASan on, can't get rid of it)
-    // Max E2E latency (us) = 2591
-    // Min E2E latency (us) = 1357
-    // Avg E2E latency (us) = 1732.93
-    // Median E2E latency (us) = 1681
-    // regular func:
-    // Max E2E latency (us) = 2911
-    // Min E2E latency (us) = 1358
-    // Avg E2E latency (us) = 1693.11
-    // Median E2E latency (us) = 1629
-    // very similar measurements. is this because of ASan?
 
     // TODO: Unify aggregation types for VECTOR and SCALAR data (in common.h)
     // fsanitize issue
@@ -77,6 +62,27 @@ int aggregation_prog(struct xdp_md* xdp_ctx) {
     //      individual components of the system 
     //          (measure per-request latency of each BPF program, profile and find hotspots)
     //  look at FPGA paper for evaluation metrics
+
+    // ================== THIS WEEK ======================
+    // [1] profile and figure out the latency bottleneck with the num buffers for io_uring
+    //  two options:
+    //      - allow users to specify num buffers themselves
+    //      - use a global pre-allocated buffer like in previous design
+
+    // [2] measure unloaded (single-request) latency and throughput for different setups (locally)
+    //     this is all done locally, just to explain the difference in performance
+    //        early dropping vs userspace aggregation for example
+    //        fan-out impact
+
+    // [3] implement different dummy baselines using IO mechanisms
+    //      naive blocking read/write
+    //      epoll
+    //      io_uring syscall batching
+    //
+    //      here the point is not only to measure latency/throughput, but also
+    //      to focus on the mechanical differences in terms of syscalls, copies,
+    //      ctx switches, etc.
+
 
 
 char LICENSE[] SEC("license") = "GPL";

@@ -82,14 +82,14 @@ int main(int argc, char** argv) {
 
     // EXAMPLE 1: Vector-based data (with in-kernel aggregation)
     sgbpf::ReqParams params; // set params here....
-    params.completionPolicy = sgbpf::GatherCompletionPolicy::WaitAny;
+    params.completionPolicy = sgbpf::GatherCompletionPolicy::WaitN;
     params.numWorkersToWait = 10;
     params.timeout = std::chrono::microseconds{100*1000}; // 10 ms
     
-    constexpr int reqs = 300;
-    // std::vector<uint64_t> times;
-    // times.reserve(reqs);
-    // auto start = std::chrono::high_resolution_clock::now();
+    constexpr int reqs = 1;
+    std::vector<uint64_t> times;
+    times.reserve(reqs);
+    auto start = std::chrono::high_resolution_clock::now();
     for (auto i = 0u; i < reqs; i++) {
         // BenchmarkTimer t{times};
         auto req = service.scatter("SCATTER", 8, params);
@@ -100,11 +100,20 @@ int main(int argc, char** argv) {
         assert(buf.hdr.req_id == req->id());
 
         service.processEvents(req->id());
-    }
-    // auto end_time = std::chrono::high_resolution_clock::now();
-    // auto elapsed_time = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start);
 
-    // std::cout << "Total elapsed time (us) = " << elapsed_time.count() << '\n';
+        // for (const auto& [wfd, ptrList] : req->bufferPointers()) {
+        //     auto msg = (sg_msg_t*) req->data(ptrList[0]);
+        //     std::cout << "--- INDIVIDUAL PK: " << ((uint32_t*)msg->body)[33]  << std::endl;
+        // }
+    }
+    auto end_time = std::chrono::high_resolution_clock::now();
+    auto elapsed_time = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start);
+
+    // buf size (8192) = 187886 us
+    // buf size (1024) = 57917 us
+
+
+    std::cout << "Total elapsed time (us) = " << elapsed_time.count() << '\n';
     // std::cout << "Avg throughput (req/s) = " << reqs / (std::chrono::duration_cast<std::chrono::seconds>(elapsed_time).count()) << std::endl;
 
     // while (1) {
@@ -128,11 +137,10 @@ int main(int argc, char** argv) {
     // AROUND REQ 427.
     // looks like workers ARE NOT sending data back? maybe they crashed?
 
-    // FIX CRASHING SCRIPT ISSUE...
-
+    // todo send requests, do not expect reply
 
     // std::cout << "sent scatter request" << std::endl;
-    // for (auto i = 0u; i < 5; i++) {
+    // for (auto i = 0u; i < 3; i++) {
     //     auto req = service.scatter("SCATTER", 8, params);
 
     //     sg_msg_t buf;
@@ -151,13 +159,13 @@ int main(int argc, char** argv) {
     //             std::cout << "DATA MISMATCH on REQ " << i << " - Got " << aggregatedData[j] << " at idx " << j << " instead of " << j * params.numWorkersToWait << std::endl;
     //             throw;
     //         }
-    //         // std::cout << "vec[" << i << "] = " << aggregatedData[i] << std::endl;
+    //         std::cout << "vec[" << j << "] = " << aggregatedData[j] << std::endl;
     //     }
-    //     // bool c = req->bufferPointers().size() == params.numWorkersToWait;
-    //     // if(!c) {
-    //     //     std::cout << "NUM PKS MISMATCH on REQ " << i << " - Got " << req->bufferPointers().size() << " instead of " << params.numWorkersToWait << std::endl;
-    //     //     throw;
-    //     // }
+    //     bool c = req->bufferPointers().size() == params.numWorkersToWait;
+    //     if(!c) {
+    //         std::cout << "NUM PKS MISMATCH on REQ " << i << " - Got " << req->bufferPointers().size() << " instead of " << params.numWorkersToWait << std::endl;
+    //         throw;
+    //     }
     //     // service.freeRequest(req);
     // }
     

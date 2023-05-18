@@ -19,7 +19,7 @@ int aggregation_prog(struct xdp_md* xdp_ctx) {
         ctx.current_value[i] += ((RESP_VECTOR_TYPE*)ctx.pk_msg->body)[i];
     }
 
-    AGGREGATION_PROG_OUTRO(ctx, DISCARD_PK);
+    AGGREGATION_PROG_OUTRO(ctx, ALLOW_PK);
 }
 
     // ITEM LIST (IN ORDER OF PRIORITY):
@@ -68,6 +68,17 @@ int aggregation_prog(struct xdp_md* xdp_ctx) {
     //  two options:
     //      - allow users to specify num buffers themselves
     //      - use a global pre-allocated buffer like in previous design
+    //
+    //  https://elixir.bootlin.com/linux/latest/source/io_uring/kbuf.c#L422
+    //  io_uring internally iterates over the number of buffers: io_add_buffers
+    //
+    //  not only that, but for a large number of packets, this is restricted by the stack size
+    //  therefore, this constrains the performance of the scatter() invocation to O(n)
+    //  Hence, the best option is to allocate a large pool of memory dedicated to packet buffers
+    //  ahead of time and use ptrs/offsets to divide this block into per-request regions
+    //  this is another implementation detail that should be mentioned in the report, as it
+    //  depends the automatic buffer selection mechanism. mention both designs, and why this one 
+    //  is preferred for performance
 
     // [2] measure unloaded (single-request) latency and throughput for different setups (locally)
     //     this is all done locally, just to explain the difference in performance

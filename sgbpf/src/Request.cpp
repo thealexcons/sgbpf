@@ -4,17 +4,21 @@ namespace sgbpf
 {
 
 Request::Request(int requestID, 
-                 std::vector<Worker>* workers, 
-                 const ReqParams& params)
+                 const ReqParams& params,
+                 const std::vector<char*>* packetBufferPool,
+                 const std::vector<Worker>* workers)
     : d_requestID{requestID}
     , d_workers{workers}
+    , d_packetBufferPool{packetBufferPool}
     , d_expectedPacketsPerMessage{params.numPksPerRespMsg}
     , d_status{Status::Waiting}
     , d_timeOut{params.timeout}
     , d_completionPolicy{params.completionPolicy}
     , d_numWorkersToWait{params.numWorkersToWait}
-{}
-
+{
+    // TODO Only do if ALLOW_PK is specified, otherwise it is unnecessary allocation
+    d_workerBufferPtrs.reserve(d_workers->size());
+}
 
 bool Request::hasTimedOut() const {
     auto end = std::chrono::steady_clock::now();
@@ -22,12 +26,17 @@ bool Request::hasTimedOut() const {
     return duration >= d_timeOut; 
 }
 
-void Request::addBufferPtr(int workerFd, int ptr) {
+void Request::addBufferPtr(int workerFd, uint16_t bgid, uint16_t bid) {
+    PacketBufferPointer ptr = {
+        .bgid = bgid,
+        .bid  = bid,
+    };
+    
     auto& vec = d_workerBufferPtrs[workerFd];
     if (__glibc_unlikely(vec.empty())) {
         vec.reserve(d_expectedPacketsPerMessage);
     }
-    d_workerBufferPtrs[workerFd].push_back(ptr);
+    d_workerBufferPtrs[workerFd].emplace_back(ptr);
 }
 
 void Request::startTimer() {
@@ -74,20 +83,20 @@ bool Request::receivedWaitN(uint32_t numWorkers) const {
     return fullMessagesReceived == numWorkers;
 }
 
-void Request::registerBuffers(io_uring* ring, bool forceSubmit) {
-    io_uring_sqe* sqe = io_uring_get_sqe(ring);
-    io_uring_prep_provide_buffers(
-        sqe, d_buffers, MaxBufferSize, NumBuffers, d_requestID, 0
-    );
-    if (forceSubmit)
-        io_uring_submit(ring);
-}
+// void Request::registerBuffers(io_uring* ring, bool forceSubmit) {
+//     io_uring_sqe* sqe = io_uring_get_sqe(ring);
+//     io_uring_prep_provide_buffers(
+//         sqe, d_buffers, MaxBufferSize, NumBuffers, d_requestID, 0
+//     );
+//     if (forceSubmit)
+//         io_uring_submit(ring);
+// }
 
-void Request::freeBuffers(io_uring* ring, bool forceSubmit) {
-    io_uring_sqe* sqe = io_uring_get_sqe(ring);
-    io_uring_prep_remove_buffers(sqe, NumBuffers, d_requestID);
-    if (forceSubmit)
-        io_uring_submit(ring);
-}
+// void Request::freeBuffers(io_uring* ring, bool forceSubmit) {
+//     io_uring_sqe* sqe = io_uring_get_sqe(ring);
+//     io_uring_prep_remove_buffers(sqe, NumBuffers, d_requestID);
+//     if (forceSubmit)
+//         io_uring_submit(ring);
+// }
 
 } // close namespace sgbpf

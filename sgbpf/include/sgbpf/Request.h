@@ -41,8 +41,8 @@ class Request
     // Manages the state and execution of a scatter gather request. Each invocation
     // of the scatter gather primitive creates an instance of this class.
 public:
-    constexpr static const auto MaxNumPksPerResponse = 8;
-    constexpr static const auto MaxNumWorkers        = 4096;
+    // constexpr static const auto MaxNumPksPerResponse = 8;
+    // constexpr static const auto MaxNumWorkers        = 4096;
     constexpr static const auto NumBuffers           = 1024; //MaxNumPksPerResponse * MaxNumWorkers;
     constexpr static const auto MaxBufferSize        = sizeof(sg_msg_t);
 
@@ -57,49 +57,56 @@ public:
 
 private:
     // DATA MEMBERS
-    int                     d_requestID;                    // The unique request ID
-    std::vector<Worker>*    d_workers;
-    unsigned int            d_expectedPacketsPerMessage = 1;    // The number of expected packets per response message
-    Status                  d_status;
+    int                       d_requestID;
+    const std::vector<Worker>*      d_workers;
+    const std::vector<char*>*       d_packetBufferPool;
+    unsigned int              d_expectedPacketsPerMessage = 1;
+    Status                    d_status;
     std::chrono::microseconds d_timeOut;
-    GatherCompletionPolicy  d_completionPolicy;
-    unsigned int            d_numWorkersToWait;
+    GatherCompletionPolicy    d_completionPolicy;
+    unsigned int              d_numWorkersToWait;
     
     std::chrono::time_point<std::chrono::steady_clock> d_startTime;
 
-    // TODO seems like NumBuffers affect request latency...
-    // make Request a template class Request<NumBufs> ??
-    char d_buffers[NumBuffers][MaxBufferSize];
+    // Points to the location of a packet buffer in the global packet memory buffer
+    struct PacketBufferPointer {
+        uint16_t bgid;  // Buffer Group ID (index into global buffer vector)
+        uint16_t bid;   // Buffer ID (index into the buffer group)
+    };
 
-    // todo make the key Worker type, instead of the fd
-    std::unordered_map<int, std::vector<int>> d_workerBufferPtrs;
+    // Map worker socket file descriptors to the received packets
+    using WorkerBufferPointerMap = std::unordered_map<int, std::vector<PacketBufferPointer>>;
+
+    WorkerBufferPointerMap d_workerBufferPtrs;
 
 public:
 
     Request() = default;
 
     Request(int requestID, 
-            std::vector<Worker>* workers, 
-            const ReqParams& params);
+            const ReqParams& params,
+            const std::vector<char*>* packetBufferPool,
+            const std::vector<Worker>* workers);
 
 
-    int id() const { return d_requestID; }
+    inline int id() const { return d_requestID; }
 
-    const std::vector<Worker>& workers() const { return *d_workers; }
+    inline const std::vector<Worker>& workers() const { return *d_workers; }
 
-    const char* data(int packetIdx) const { return d_buffers[packetIdx]; }
+    inline const WorkerBufferPointerMap& bufferPointers() const { return d_workerBufferPtrs; };
 
-    // TODO use Worker instance as key instead of FD
-    const std::unordered_map<int, std::vector<int>>& bufferPointers() const { return d_workerBufferPtrs; };
+    inline bool isReady() const { return d_status == Status::Ready; }
 
-    bool isReady() const { return d_status == Status::Ready; }
+    inline bool isExpired() const { return d_status == Status::TimedOut; }
 
-    bool isExpired() const { return d_status == Status::TimedOut; }
+    inline const char* data(const PacketBufferPointer& packetPtr) const {
+        return ((*d_packetBufferPool)[packetPtr.bgid] + packetPtr.bid * Request::MaxBufferSize);
+    }
 
 protected:
     bool hasTimedOut() const;
 
-    void addBufferPtr(int workerFd, int ptr);
+    void addBufferPtr(int workerFd, uint16_t bgid, uint16_t bid);
 
     void startTimer();
 
@@ -109,9 +116,9 @@ protected:
 
     bool receivedWaitN(uint32_t numWorkers) const;
 
-    void registerBuffers(io_uring* ring, bool forceSubmit = false);
+    // void registerBuffers(io_uring* ring, bool forceSubmit = false);
 
-    void freeBuffers(io_uring* ring, bool forceSubmit = false);
+    // void freeBuffers(io_uring* ring, bool forceSubmit = false);
 };
 
 

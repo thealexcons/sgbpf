@@ -14,20 +14,20 @@ enum {
 typedef struct conn_info {
     int      fd;
     uint16_t type;
-    uint16_t bgid;    // reqID
+    uint16_t bgid;
 } conn_info_t;
 
 // Add a socket read operation to the IO ring
-inline void addSocketRead(io_uring *ring, int fd, unsigned gid, size_t message_size, unsigned flags) {
+inline void addSocketRead(io_uring *ring, int fd, uint16_t bgid, size_t message_size, unsigned flags) {
     io_uring_sqe *sqe = io_uring_get_sqe(ring);
     io_uring_prep_recv(sqe, fd, NULL, message_size, MSG_WAITALL); // wait for all fragments to arrive
     io_uring_sqe_set_flags(sqe, flags);
-    sqe->buf_group = gid;
+    sqe->buf_group = bgid;
 
     conn_info_t conn_i = {
         .fd = fd,
         .type = IO_READ,
-        .bgid = static_cast<uint16_t>(gid),
+        .bgid = bgid,
     };
     memcpy(&sqe->user_data, &conn_i, sizeof(conn_info_t));
 }
@@ -42,7 +42,6 @@ inline void addScatterSend(io_uring* ring, int skfd, const msghdr* msgh) {
     conn_info_t conn_i = {
         .fd = skfd,
         .type = IO_WRITE,
-        .bgid = 0,
     };
     memcpy(&sqe->user_data, &conn_i, sizeof(conn_info_t));
 }
@@ -80,11 +79,15 @@ Service::Service(Context& ctx,
     , d_workers{workers}
     , d_ioCtx{2048} // NOTE: these are CQ entries, so it doesn't have to be too big
                     // assuming the user is calling processEvents() adequately
+    , d_numSkReads{0}
 {
-    d_activeRequests.reserve(MAX_ACTIVE_REQUESTS_ALLOWED);
-
     if (d_workers.size() > MAX_SOCKETS_ALLOWED)
         throw std::invalid_argument{"Exceeded max number of workers allowed"};
+
+    d_activeRequests.reserve(MAX_ACTIVE_REQUESTS_ALLOWED);
+
+    // Provide an initial buffer for packets
+    provideBuffers(true);
 
     // Configure the worker sockets
     int workerFds[MAX_SOCKETS_ALLOWED];
@@ -139,6 +142,9 @@ Service::Service(Context& ctx,
 
 Service::~Service()
 {
+    for (const auto buffer : d_packetBufferPool)
+        delete[] buffer;
+        
     // TODO rather than opening and closing a socket every time, we could keep
     // a global pool of reusable sockets to avoid this on every invokation of the primitive
     close(d_scatterSkFd);
@@ -166,7 +172,7 @@ Request* Service::scatter(const char* msg, size_t len, ReqParams params)
     int reqId = s_nextRequestID++;
     d_activeRequests.emplace(std::piecewise_construct,
             std::forward_as_tuple(reqId),
-            std::forward_as_tuple(reqId, &d_workers, params)
+            std::forward_as_tuple(reqId, params, &d_packetBufferPool, &d_workers)
     );
 
     Request* req = &d_activeRequests[reqId];
@@ -185,7 +191,7 @@ Request* Service::scatter(const char* msg, size_t len, ReqParams params)
     // to the request ID) and the buffer ID is automatically set by io_uring and obtained
     // in the completion queue. This ID can be used by the developer
     // as a pointer into the buffer to read the packet contents.
-    req->registerBuffers(&d_ioCtx.ring);
+    // req->registerBuffers(&d_ioCtx.ring);
 
     // Add IO operations to the ring and submit as batch to io_uring
     sg_msg_t scatter_msg;
@@ -210,9 +216,16 @@ Request* Service::scatter(const char* msg, size_t len, ReqParams params)
 
     addScatterSend(&d_ioCtx.ring, d_scatterSkFd, &msgh);
 
+    auto bgid = d_packetBufferPool.size() - 1; // use the most recent bgid
     for (auto w : d_workers) {
         for (auto i = 0u; i < params.numPksPerRespMsg; i++) {
-            addSocketRead(&d_ioCtx.ring, w.socketFd(), reqId, Request::MaxBufferSize, IOSQE_BUFFER_SELECT);
+            // check for re-allocation of buffers
+            if (d_numSkReads == NUM_BUFFERS) {
+                bgid = provideBuffers();
+                d_numSkReads = 0;
+            }
+            d_numSkReads++;
+            addSocketRead(&d_ioCtx.ring, w.socketFd(), bgid, Request::MaxBufferSize, IOSQE_BUFFER_SELECT);
         }
     }
     io_uring_submit(&d_ioCtx.ring);
@@ -223,6 +236,8 @@ Request* Service::scatter(const char* msg, size_t len, ReqParams params)
 
 
 void Service::processEvents(int requestID) {
+    // TODO specify whether packets are discarded
+    // if so, we just skip the logic in the loop and advance the cqes
     processPendingEvents(requestID);
 }
 
@@ -246,11 +261,14 @@ void Service::processPendingEvents(int requestID) {
         }
         
         if (conn_i->type == IO_READ && cqe->res > 0) {
-            auto reqId = conn_i->bgid;                              // the packet's request ID
-            auto buffIdx = cqe->flags >> IORING_CQE_BUFFER_SHIFT;   // the packet's buffer index
-            auto& req = d_activeRequests[reqId];                    // get the associated request
-            const auto resp = (sg_msg_t*) req.data(buffIdx);
-            // assert(resp->hdr.req_id == reqId); // why??
+            auto bgid = conn_i->bgid;                               // the buffer group ID
+            auto bid = cqe->flags >> IORING_CQE_BUFFER_SHIFT;       // the packet's buffer index within the group
+            const auto resp = (sg_msg_t*) (d_packetBufferPool[bgid] + bid * Request::MaxBufferSize);
+            auto reqIt = d_activeRequests.find(resp->hdr.req_id);
+            if (reqIt == d_activeRequests.end()) {
+                continue;
+            }
+            auto& req = reqIt->second;
 
             // If we are only processing packets for a given request
             if (processOnlyGivenReq && (req.id() != requestID || resp->hdr.req_id != static_cast<uint32_t>(req.id()))) {
@@ -282,7 +300,7 @@ void Service::processPendingEvents(int requestID) {
             // std::cout << "Got pk on fd " << conn_i->fd << " for req " << req.id() << std::endl;
             #endif
 
-            req.addBufferPtr(conn_i->fd, buffIdx);
+            req.addBufferPtr(conn_i->fd, bgid, bid);
             if (req.receivedSufficientPackets()) {
                 #ifdef DEBUG_PRINT
                 std::cout << "[DEBUG] Request " << req.id() << " is ready" << std::endl;
@@ -302,8 +320,16 @@ void Service::processPendingEvents(int requestID) {
                         remaining += pksRemainingForThisWorker;
 
                         // Add the remaining socket read operations to the SQ
-                        for (auto i = 0; i < pksRemainingForThisWorker; i++)
-                            addSocketRead(&d_ioCtx.ring, wfd, req.id(), Request::MaxBufferSize, IOSQE_BUFFER_SELECT);
+                        auto bgid = d_packetBufferPool.size() - 1;
+                        for (auto i = 0; i < pksRemainingForThisWorker; i++) {
+                            // check for re-allocation of buffers
+                            if (d_numSkReads == NUM_BUFFERS) {
+                                bgid = provideBuffers();
+                                d_numSkReads = 0;
+                            }
+                            d_numSkReads++;
+                            addSocketRead(&d_ioCtx.ring, wfd, bgid, Request::MaxBufferSize, IOSQE_BUFFER_SELECT);
+                        }
                     }
                 }
                 submitPendingReads = (remaining > 0);
@@ -328,7 +354,7 @@ void Service::processPendingEvents(int requestID) {
 
 void Service::freeRequest(Request* req, bool immediate) {
     // Free the IO uring buffers
-    req->freeBuffers(&d_ioCtx.ring);
+    // req->freeBuffers(&d_ioCtx.ring);
 
     // Send a clean up message to eBPF to reset any old state
     sg_clean_req_msg_t cleanMsg = {
@@ -352,6 +378,50 @@ void Service::freeRequest(Request* req, bool immediate) {
     io_uring_sqe_set_flags(sqe, 0);
     if (immediate)
         io_uring_submit(&d_ioCtx.ring);
+}
+
+uint16_t Service::provideBuffers(bool immediate) {
+    // Register packet buffers for buffer selection
+    char* buffer  = new char[NUM_BUFFERS * Request::MaxBufferSize];
+    d_packetBufferPool.push_back(buffer);
+
+    #ifdef DEBUG_PRINT
+    std::cout << "[DEBUG] Providing buffers to the kernel (new bgid = "
+              << d_packetBufferPool.size() - 1 << ") num reads = " << d_numSkReads << std::endl;
+    #endif
+    // ISSUE: bids are 16-bit, so numBuffers must be a maximum of 1 << 16 ...
+    // may need to keep track of this and periodically provide more buffers if necessary
+
+    // OR every 1 << 16 packets we make a new call, and keep track of all the state
+    // and increment the buff group ID
+
+    // can also re-provide existing buffers
+
+    // note that this is 1 << 16 packets and NOT requests
+
+    // everu 1 << 16 submitted reads, we re-call this (req agnostic)
+
+    // map each "global" request ID to a metadata struct:
+    // map<reqID, req_buff_metadata>
+    // where req_buff_metadata = { char* ptr,
+    //                             uint16_t bid,  // packet idx
+    //                             uint16_t bgid, // 0, 1, 2, 3 (increment on every call to provide_buffers)
+    //                            }
+    // keep a counter of read_ops, which wraps around every 1 << 16
+
+    auto bgid = d_packetBufferPool.size() - 1;  // the idx of the buffer in the pool
+    io_uring_sqe* sqe = io_uring_get_sqe(&d_ioCtx.ring);
+    io_uring_prep_provide_buffers(sqe, buffer, Request::MaxBufferSize, NUM_BUFFERS, bgid, 0);
+
+    if (immediate) {
+        io_uring_submit(&d_ioCtx.ring);
+        io_uring_cqe* cqe;
+        io_uring_wait_cqe(&d_ioCtx.ring, &cqe);
+        if (cqe->res < 0)
+            throw std::runtime_error{"Failed to provide io_uring buffers to the kernel"};
+        io_uring_cqe_seen(&d_ioCtx.ring, cqe);
+    }
+    return bgid;
 }
 
 } // close namespace sgbpf

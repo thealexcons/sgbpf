@@ -20,20 +20,23 @@ class Service
 {
 private:
     // DATA MEMBERS
-    int                     d_scatterSkFd;  // Scatter socket
-    sockaddr_in             d_scatterSkAddr;
-    int                     d_ctrlSkFd;     // Gather control socket
-    Context&                d_ctx;
-    std::vector<Worker>     d_workers;
-
-    const uint16_t PORT = 9225;    // just generate and add to map
-
-    std::unordered_map<int, Request>   d_activeRequests;
-    IOUringContext d_ioCtx;
+    int                                 d_scatterSkFd;
+    sockaddr_in                         d_scatterSkAddr;
+    int                                 d_ctrlSkFd;
+    Context&                            d_ctx;
+    std::vector<Worker>                 d_workers;
+    IOUringContext                      d_ioCtx;
+    // char*                               d_packetBufferPool;
+    // size_t                              d_numBuffers;
+    size_t                              d_numSkReads;
+    std::vector<char*>                  d_packetBufferPool;
+    std::unordered_map<int, Request>    d_activeRequests;
 
     static uint32_t s_nextRequestID;
 
+    constexpr static const uint16_t PORT = 9225;    // just generate and add to map
     constexpr static const int DEFAULT_REQUEST_ID = -1;
+    constexpr static const int NUM_BUFFERS = std::numeric_limits<uint16_t>::max();
 
 public:
 
@@ -53,6 +56,8 @@ public:
 private:
 
     void processPendingEvents(int requestID);
+
+    uint16_t provideBuffers(bool immediate = false);
 };
 
 

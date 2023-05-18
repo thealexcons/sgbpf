@@ -142,11 +142,16 @@ Service::Service(Context& ctx,
 
 Service::~Service()
 {
-    for (const auto buffer : d_packetBufferPool)
+    // Free all the allocated memory used for storing packets 
+    for (auto i = 0u; i < d_packetBufferPool.size(); ++i) {
+        auto buffer = d_packetBufferPool[i];
+        io_uring_sqe* sqe = io_uring_get_sqe(&d_ioCtx.ring);
+        io_uring_prep_remove_buffers(sqe, NUM_BUFFERS, i);
         delete[] buffer;
-        
-    // TODO rather than opening and closing a socket every time, we could keep
-    // a global pool of reusable sockets to avoid this on every invokation of the primitive
+    }
+    io_uring_submit(&d_ioCtx.ring);
+
+    // Close all sockets
     close(d_scatterSkFd);
     close(d_ctrlSkFd);
     for (auto w : d_workers)
@@ -353,9 +358,6 @@ void Service::processPendingEvents(int requestID) {
 
 
 void Service::freeRequest(Request* req, bool immediate) {
-    // Free the IO uring buffers
-    // req->freeBuffers(&d_ioCtx.ring);
-
     // Send a clean up message to eBPF to reset any old state
     sg_clean_req_msg_t cleanMsg = {
         .magic = SG_CLEAN_REQ_MSG_MAGIC,
@@ -389,26 +391,6 @@ uint16_t Service::provideBuffers(bool immediate) {
     std::cout << "[DEBUG] Providing buffers to the kernel (new bgid = "
               << d_packetBufferPool.size() - 1 << ") num reads = " << d_numSkReads << std::endl;
     #endif
-    // ISSUE: bids are 16-bit, so numBuffers must be a maximum of 1 << 16 ...
-    // may need to keep track of this and periodically provide more buffers if necessary
-
-    // OR every 1 << 16 packets we make a new call, and keep track of all the state
-    // and increment the buff group ID
-
-    // can also re-provide existing buffers
-
-    // note that this is 1 << 16 packets and NOT requests
-
-    // everu 1 << 16 submitted reads, we re-call this (req agnostic)
-
-    // map each "global" request ID to a metadata struct:
-    // map<reqID, req_buff_metadata>
-    // where req_buff_metadata = { char* ptr,
-    //                             uint16_t bid,  // packet idx
-    //                             uint16_t bgid, // 0, 1, 2, 3 (increment on every call to provide_buffers)
-    //                            }
-    // keep a counter of read_ops, which wraps around every 1 << 16
-
     auto bgid = d_packetBufferPool.size() - 1;  // the idx of the buffer in the pool
     io_uring_sqe* sqe = io_uring_get_sqe(&d_ioCtx.ring);
     io_uring_prep_provide_buffers(sqe, buffer, Request::MaxBufferSize, NUM_BUFFERS, bgid, 0);

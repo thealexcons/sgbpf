@@ -57,14 +57,14 @@ public:
 
 private:
     // DATA MEMBERS
-    int                       d_requestID;
-    const std::vector<Worker>*      d_workers;
-    const std::vector<char*>*       d_packetBufferPool;
-    unsigned int              d_expectedPacketsPerMessage = 1;
-    Status                    d_status;
-    std::chrono::microseconds d_timeOut;
-    GatherCompletionPolicy    d_completionPolicy;
-    unsigned int              d_numWorkersToWait;
+    int                        d_requestID;
+    const std::vector<Worker>* d_workers;
+    const std::vector<char*>*  d_packetBufferPool;
+    unsigned int               d_expectedPacketsPerMessage = 1;
+    Status                     d_status;
+    std::chrono::microseconds  d_timeOut;
+    GatherCompletionPolicy     d_completionPolicy;
+    unsigned int               d_numWorkersToWait;
     
     std::chrono::time_point<std::chrono::steady_clock> d_startTime;
 
@@ -115,10 +115,6 @@ protected:
     bool receivedWaitAny() const;
 
     bool receivedWaitN(uint32_t numWorkers) const;
-
-    // void registerBuffers(io_uring* ring, bool forceSubmit = false);
-
-    // void freeBuffers(io_uring* ring, bool forceSubmit = false);
 };
 
 

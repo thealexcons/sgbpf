@@ -26,8 +26,6 @@ private:
     Context&                            d_ctx;
     std::vector<Worker>                 d_workers;
     IOUringContext                      d_ioCtx;
-    // char*                               d_packetBufferPool;
-    // size_t                              d_numBuffers;
     size_t                              d_numSkReads;
     std::vector<char*>                  d_packetBufferPool;
     std::unordered_map<int, Request>    d_activeRequests;

@@ -83,20 +83,4 @@ bool Request::receivedWaitN(uint32_t numWorkers) const {
     return fullMessagesReceived == numWorkers;
 }
 
-// void Request::registerBuffers(io_uring* ring, bool forceSubmit) {
-//     io_uring_sqe* sqe = io_uring_get_sqe(ring);
-//     io_uring_prep_provide_buffers(
-//         sqe, d_buffers, MaxBufferSize, NumBuffers, d_requestID, 0
-//     );
-//     if (forceSubmit)
-//         io_uring_submit(ring);
-// }
-
-// void Request::freeBuffers(io_uring* ring, bool forceSubmit) {
-//     io_uring_sqe* sqe = io_uring_get_sqe(ring);
-//     io_uring_prep_remove_buffers(sqe, NumBuffers, d_requestID);
-//     if (forceSubmit)
-//         io_uring_submit(ring);
-// }
-
 } // close namespace sgbpf

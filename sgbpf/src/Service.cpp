@@ -200,11 +200,11 @@ Request* Service::scatter(const char* msg, size_t len, ReqParams params)
 
     // Add IO operations to the ring and submit as batch to io_uring
     sg_msg_t scatter_msg;
-    memset(&scatter_msg, 0, sizeof(sg_msg_t));
     scatter_msg.hdr.req_id = reqId;
-    scatter_msg.hdr.msg_type = SCATTER_MSG;
-    scatter_msg.hdr.body_len = std::min(len, BODY_LEN);
+    scatter_msg.hdr.seq_num = 0;
     scatter_msg.hdr.num_pks = num_pks; 
+    scatter_msg.hdr.body_len = std::min(len, BODY_LEN);
+    scatter_msg.hdr.msg_type = SCATTER_MSG;
     scatter_msg.hdr.flags = msgFlags;
     strncpy(scatter_msg.body, msg, scatter_msg.hdr.body_len);
 

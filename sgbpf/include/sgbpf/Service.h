@@ -34,7 +34,7 @@ private:
     IOUringContext                      d_ioCtx;
     size_t                              d_numSkReads;
     std::vector<char*>                  d_packetBufferPool;
-    std::unordered_map<int, Request>    d_activeRequests;
+    Request*                            d_activeRequests;
     PacketAction                        d_packetAction;
     
     static uint32_t s_nextRequestID;

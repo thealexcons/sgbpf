@@ -57,6 +57,7 @@ public:
 
 private:
     // DATA MEMBERS
+    bool                       d_isActive = false;
     int                        d_requestID;
     const std::vector<Worker>* d_workers;
     const std::vector<char*>*  d_packetBufferPool;
@@ -91,6 +92,8 @@ public:
 
 
     inline int id() const { return d_requestID; }
+
+    inline bool isActive() const { return d_isActive; }
 
     inline const std::vector<Worker>& workers() const { return *d_workers; }
 

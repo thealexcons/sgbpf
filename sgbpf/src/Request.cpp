@@ -8,7 +8,8 @@ Request::Request(int requestID,
                  const std::vector<char*>* packetBufferPool,
                  const std::vector<Worker>* workers,
                  bool allowPackets)
-    : d_requestID{requestID}
+    : d_isActive{true}
+    , d_requestID{requestID}
     , d_workers{workers}
     , d_packetBufferPool{packetBufferPool}
     , d_expectedPacketsPerMessage{params.numPksPerRespMsg}

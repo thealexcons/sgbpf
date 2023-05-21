@@ -67,6 +67,10 @@ std::pair<int, uint16_t> openWorkerSocket() {
     return { workerSk, workerAddr.sin_port };
 }
 
+inline uint32_t getRequestMapIdx(uint32_t reqID) {
+    return reqID & (MAX_ACTIVE_REQUESTS_ALLOWED - 1);
+}
+
 } // close anonymous namespce
 
 
@@ -86,7 +90,8 @@ Service::Service(Context& ctx,
     if (d_workers.size() > MAX_SOCKETS_ALLOWED)
         throw std::invalid_argument{"Exceeded max number of workers allowed"};
 
-    d_activeRequests.reserve(MAX_ACTIVE_REQUESTS_ALLOWED);
+    // d_activeRequests.reserve(MAX_ACTIVE_REQUESTS_ALLOWED);
+    d_activeRequests = new Request[MAX_ACTIVE_REQUESTS_ALLOWED];
 
     // Provide an initial buffer for packets
     provideBuffers(true);
@@ -144,6 +149,8 @@ Service::Service(Context& ctx,
 
 Service::~Service()
 {
+    delete[] d_activeRequests;
+
     // Free all the allocated memory used for storing packets 
     for (auto i = 0u; i < d_packetBufferPool.size(); ++i) {
         auto buffer = d_packetBufferPool[i];
@@ -179,18 +186,15 @@ Request* Service::scatter(const char* msg, size_t len, ReqParams params)
     bool allowPks = d_packetAction == PacketAction::Allow;
 
     int reqId = s_nextRequestID++;
-    d_activeRequests.emplace(std::piecewise_construct,
-            std::forward_as_tuple(reqId),
-            std::forward_as_tuple(reqId, params, &d_packetBufferPool, &d_workers, allowPks)
-    );
+    auto idx = getRequestMapIdx(reqId);
+    Request* req = new (d_activeRequests + idx) Request{reqId, params, &d_packetBufferPool, &d_workers, allowPks};
 
-    Request* req = &d_activeRequests[reqId];
-    // TODO need a garbage collection mechanism to free the memory used
-    // by cancelled and old requests
-    // How to handle this?? buffers can be recycled by submitting another provide_buffers
-    // or can be freed by submitting remove_buffers ... 
-    // when a request is considered done, call req->freeBuffers(&d_ioCtx.ring);
-    // in destructor?? or manually?
+    // d_activeRequests.emplace(std::piecewise_construct,
+    //         std::forward_as_tuple(reqId),
+    //         std::forward_as_tuple(reqId, params, &d_packetBufferPool, &d_workers, allowPks)
+    // );
+    // Request* req = &d_activeRequests[reqId];
+ 
 
     // Register response packet buffers for this SG request
     // Every ScatterGatherRequest instance allocates a set of buffers to store the
@@ -277,11 +281,10 @@ void Service::processPendingEvents(int requestID) {
             auto bgid = conn_i->bgid;                               // the buffer group ID
             auto bid = cqe->flags >> IORING_CQE_BUFFER_SHIFT;       // the packet's buffer index within the group
             const auto resp = (sg_msg_t*) (d_packetBufferPool[bgid] + bid * Request::MaxBufferSize);
-            auto reqIt = d_activeRequests.find(resp->hdr.req_id);
-            if (reqIt == d_activeRequests.end()) {
+            auto req = d_activeRequests[getRequestMapIdx(resp->hdr.req_id)];
+            if (!req.isActive()) {
                 continue;
             }
-            auto& req = reqIt->second;
 
             // If we are only processing packets for a given request
             if (processOnlyGivenReq && (req.id() != requestID || resp->hdr.req_id != static_cast<uint32_t>(req.id()))) {

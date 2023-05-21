@@ -6,7 +6,8 @@ namespace sgbpf
 Request::Request(int requestID, 
                  const ReqParams& params,
                  const std::vector<char*>* packetBufferPool,
-                 const std::vector<Worker>* workers)
+                 const std::vector<Worker>* workers,
+                 bool allowPackets)
     : d_requestID{requestID}
     , d_workers{workers}
     , d_packetBufferPool{packetBufferPool}
@@ -16,8 +17,9 @@ Request::Request(int requestID,
     , d_completionPolicy{params.completionPolicy}
     , d_numWorkersToWait{params.numWorkersToWait}
 {
-    // TODO Only do if ALLOW_PK is specified, otherwise it is unnecessary allocation
-    d_workerBufferPtrs.reserve(d_workers->size());
+    if (allowPackets) {
+        d_workerBufferPtrs.reserve(d_workers->size());
+    }
 }
 
 bool Request::hasTimedOut() const {

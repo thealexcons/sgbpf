@@ -86,7 +86,8 @@ public:
     Request(int requestID, 
             const ReqParams& params,
             const std::vector<char*>* packetBufferPool,
-            const std::vector<Worker>* workers);
+            const std::vector<Worker>* workers,
+            bool allowPackets);
 
 
     inline int id() const { return d_requestID; }

@@ -16,6 +16,12 @@ namespace sgbpf
 {
 
 
+enum class PacketAction 
+{
+    Discard,
+    Allow,
+};
+
 class Service 
 {
 private:
@@ -29,7 +35,8 @@ private:
     size_t                              d_numSkReads;
     std::vector<char*>                  d_packetBufferPool;
     std::unordered_map<int, Request>    d_activeRequests;
-
+    PacketAction                        d_packetAction;
+    
     static uint32_t s_nextRequestID;
 
     constexpr static const uint16_t PORT = 9225;    // just generate and add to map
@@ -39,7 +46,8 @@ private:
 public:
 
     Service(Context& ctx,
-            const std::vector<Worker>& workers);
+            const std::vector<Worker>& workers,
+            PacketAction packetAction);
 
     ~Service();
 
@@ -57,7 +65,6 @@ private:
 
     uint16_t provideBuffers(bool immediate = false);
 };
-
 
 } // close namespace sgbpf
 

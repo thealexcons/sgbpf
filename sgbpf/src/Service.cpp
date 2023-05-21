@@ -74,12 +74,14 @@ uint32_t Service::s_nextRequestID = 0;
 
 
 Service::Service(Context& ctx, 
-                 const std::vector<Worker>& workers) 
+                 const std::vector<Worker>& workers,
+                 PacketAction packetAction) 
     : d_ctx{ctx}
     , d_workers{workers}
     , d_ioCtx{2048} // NOTE: these are CQ entries, so it doesn't have to be too big
                     // assuming the user is calling processEvents() adequately
     , d_numSkReads{0}
+    , d_packetAction{packetAction}
 {
     if (d_workers.size() > MAX_SOCKETS_ALLOWED)
         throw std::invalid_argument{"Exceeded max number of workers allowed"};
@@ -174,10 +176,12 @@ Request* Service::scatter(const char* msg, size_t len, ReqParams params)
         num_pks = d_workers.size();
     }
 
+    bool allowPks = d_packetAction == PacketAction::Allow;
+
     int reqId = s_nextRequestID++;
     d_activeRequests.emplace(std::piecewise_construct,
             std::forward_as_tuple(reqId),
-            std::forward_as_tuple(reqId, params, &d_packetBufferPool, &d_workers)
+            std::forward_as_tuple(reqId, params, &d_packetBufferPool, &d_workers, allowPks)
     );
 
     Request* req = &d_activeRequests[reqId];
@@ -221,18 +225,21 @@ Request* Service::scatter(const char* msg, size_t len, ReqParams params)
 
     addScatterSend(&d_ioCtx.ring, d_scatterSkFd, &msgh);
 
-    auto bgid = d_packetBufferPool.size() - 1; // use the most recent bgid
-    for (auto w : d_workers) {
-        for (auto i = 0u; i < params.numPksPerRespMsg; i++) {
-            // check for re-allocation of buffers
-            if (d_numSkReads == NUM_BUFFERS) {
-                bgid = provideBuffers();
-                d_numSkReads = 0;
+    if (allowPks) {
+        auto bgid = d_packetBufferPool.size() - 1; // use the most recent bgid
+        for (auto w : d_workers) {
+            for (auto i = 0u; i < params.numPksPerRespMsg; i++) {
+                // check for re-allocation of buffers
+                if (d_numSkReads == NUM_BUFFERS) {
+                    bgid = provideBuffers();
+                    d_numSkReads = 0;
+                }
+                d_numSkReads++;
+                addSocketRead(&d_ioCtx.ring, w.socketFd(), bgid, Request::MaxBufferSize, IOSQE_BUFFER_SELECT);
             }
-            d_numSkReads++;
-            addSocketRead(&d_ioCtx.ring, w.socketFd(), bgid, Request::MaxBufferSize, IOSQE_BUFFER_SELECT);
         }
     }
+    
     io_uring_submit(&d_ioCtx.ring);
     req->startTimer();
 
@@ -241,8 +248,6 @@ Request* Service::scatter(const char* msg, size_t len, ReqParams params)
 
 
 void Service::processEvents(int requestID) {
-    // TODO specify whether packets are discarded
-    // if so, we just skip the logic in the loop and advance the cqes
     processPendingEvents(requestID);
 }
 
@@ -258,6 +263,9 @@ void Service::processPendingEvents(int requestID) {
 
     io_uring_for_each_cqe(&d_ioCtx.ring, head, cqe) {
         ++count;
+        if (d_packetAction == PacketAction::Discard)
+            continue;
+
         const auto conn_i = reinterpret_cast<conn_info_t*>(&cqe->user_data);
 
         if (cqe->res == -ENOBUFS) {

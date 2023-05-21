@@ -12,13 +12,13 @@
 
 class ScatterGatherService {
 
-    const std::vector<Worker>& d_workers;
+    std::vector<Worker>&       d_workers;
     uint32_t                   d_nextRequest = 0;
     int                        d_epollFd;
     epoll_event*               d_events;         
 
 public:
-    ScatterGatherService(const std::vector<Worker>& workers)
+    ScatterGatherService(std::vector<Worker>& workers)
         : d_workers{workers}
     {
         d_events = new epoll_event[d_workers.size()];
@@ -28,7 +28,7 @@ public:
         assert(d_epollFd != -1);
 
         // make all worker sockets non-blocking
-        for (const auto& worker : d_workers) {
+        for (auto& worker : d_workers) {
             int flags = fcntl(worker.socketFd(), F_GETFL, 0);
             assert(flags != -1);
             flags |= O_NONBLOCK;
@@ -57,7 +57,7 @@ public:
         strncpy(scatter_msg.body, msg, scatter_msg.hdr.body_len);
 
         socklen_t addrSize = sizeof(sockaddr_in);
-        for (const auto& worker : d_workers) {
+        for (auto& worker : d_workers) {
             sendto(worker.socketFd(), &scatter_msg, sizeof(sg_msg_t), 0, (struct sockaddr *)worker.destAddr(), addrSize);              
         }
     }

@@ -10,12 +10,12 @@
 
 class ScatterGatherService {
 
-    const std::vector<Worker>& d_workers;
+    std::vector<Worker>&       d_workers;
     uint32_t                   d_nextRequest = 0;
     int                        d_skFd;
 
 public:
-    ScatterGatherService(const std::vector<Worker>& workers)
+    ScatterGatherService(std::vector<Worker>& workers)
         : d_workers{workers}
     {
         d_skFd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -33,7 +33,7 @@ public:
         strncpy(scatter_msg.body, msg, scatter_msg.hdr.body_len);
 
         socklen_t addrSize = sizeof(sockaddr_in);
-        for (const auto& worker : d_workers) {
+        for (auto& worker : d_workers) {
             // MAIN DIFFERENCE HERE: send via a single "global" socket to the worker
             sendto(d_skFd, &scatter_msg, sizeof(sg_msg_t), 0, (struct sockaddr *)worker.destAddr(), addrSize);              
         }
@@ -41,7 +41,7 @@ public:
 
     template <typename DATA_TYPE>
     void gather(DATA_TYPE* result) {
-        for (const auto& _ : d_workers) {
+        for (auto& _ : d_workers) {
             sockaddr_in client;
             socklen_t clientSize = sizeof(sockaddr_in);
             sg_msg_t resp;

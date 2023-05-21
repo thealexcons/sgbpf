@@ -10,11 +10,11 @@
 
 class ScatterGatherService {
 
-    const std::vector<Worker>& d_workers;
+    std::vector<Worker>&       d_workers;
     uint32_t                   d_nextRequest = 0;
 
 public:
-    ScatterGatherService(const std::vector<Worker>& workers)
+    ScatterGatherService(std::vector<Worker>& workers)
         : d_workers{workers}
     {}
 
@@ -30,14 +30,14 @@ public:
         strncpy(scatter_msg.body, msg, scatter_msg.hdr.body_len);
 
         socklen_t addrSize = sizeof(sockaddr_in);
-        for (const auto& worker : d_workers) {
+        for (auto& worker : d_workers) {
             sendto(worker.socketFd(), &scatter_msg, sizeof(sg_msg_t), 0, (struct sockaddr *)worker.destAddr(), addrSize);              
         }
     }
 
     template <typename DATA_TYPE>
     void gather(DATA_TYPE* result) {
-        for (const auto& worker : d_workers) {
+        for (auto& worker : d_workers) {
             sg_msg_t resp;
             auto bytes = recv(worker.socketFd(), &resp, sizeof(sg_msg_t), 0);
             assert(bytes == sizeof(sg_msg_t));

@@ -56,7 +56,7 @@ public:
 
     // GETTERS
     int socketFd() const { return d_skFd; }
-    const sockaddr_in* destAddr() const { return &d_destAddr; }
+    sockaddr_in* destAddr() { return &d_destAddr; }
 
     // STATIC METHODS
     static std::vector<Worker> fromFile(const std::string& filePath) {

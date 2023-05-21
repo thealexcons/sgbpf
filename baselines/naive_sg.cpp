@@ -56,12 +56,19 @@ public:
 
 int main(int argc, char* argv[]) {
 
+    if (argc < 2) {
+        std::cerr << "Please provide the number of requests to send" << std::endl;
+        return 1;
+    }
+    int numRequests = atoi(argv[1]);
+
     auto workers = Worker::fromFile("workers.cfg");
     ScatterGatherService service{workers};
 
+    auto start = std::chrono::high_resolution_clock::now();
+
     // assume requests are sequential
-    constexpr static int NUM_REQS = 1;
-    for (auto i = 0u; i < NUM_REQS; ++i) {
+    for (auto i = 0; i < numRequests; ++i) {
         service.scatter("SCATTER", 8);
 
         uint32_t data[1024]; // reserve enough memory
@@ -69,4 +76,10 @@ int main(int argc, char* argv[]) {
         service.gather<uint32_t>(data);
     }
 
+    auto end_time = std::chrono::high_resolution_clock::now();
+    auto elapsed_time = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start);
+    std::cout << "Total time = " << elapsed_time.count() << " us - " 
+                << "Num requests = " << numRequests 
+                << " , Num Workers = " << workers.size() 
+                << std::endl;
 }

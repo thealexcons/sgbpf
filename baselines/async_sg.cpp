@@ -106,7 +106,7 @@ public:
             unsigned head;
             io_uring_for_each_cqe(&d_ring, head, cqe) {
                 ++count;
-                if (cqe->res > 0 && cqe->user_data == READ_OP) {
+                if (cqe->user_data == READ_OP) {
                     auto bid = cqe->flags >> IORING_CQE_BUFFER_SHIFT;
                     auto resp = (sg_msg_t*) (d_buffers + bid * sizeof(sg_msg_t));
 
@@ -116,10 +116,10 @@ public:
                     for (auto i = 0u; i < numElems; i++) {
                         result[i] += resp_data[i];
                     }
+                    remainingReads -= 1;
                 }
             }
             io_uring_cq_advance(&d_ring, count);
-            remainingReads -= count;
         }
     }
 
@@ -128,17 +128,29 @@ public:
 
 int main(int argc, char* argv[]) {
 
+    if (argc < 2) {
+        std::cerr << "Please provide the number of requests to send" << std::endl;
+        return 1;
+    }
+    int numRequests = atoi(argv[1]);
+
     auto workers = Worker::fromFile("workers.cfg");
     ScatterGatherService service{workers};
 
+    auto start = std::chrono::high_resolution_clock::now();
+
     // assume requests are sequential
-    constexpr static int NUM_REQS = 1;
-    for (auto i = 0u; i < NUM_REQS; ++i) {
+    for (auto i = 0; i < numRequests; ++i) {
         service.scatter("SCATTER", 8);
 
         uint32_t data[1024]; // reserve enough memory
         memset(data, 0, sizeof(data));
         service.gather<uint32_t>(data);
     }
-
+    auto end_time = std::chrono::high_resolution_clock::now();
+    auto elapsed_time = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start);
+    std::cout << "Total time = " << elapsed_time.count() << " us - " 
+                << "Num requests = " << numRequests 
+                << " , Num Workers = " << workers.size() 
+                << std::endl;
 }

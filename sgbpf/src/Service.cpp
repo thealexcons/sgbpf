@@ -82,8 +82,7 @@ Service::Service(Context& ctx,
                  PacketAction packetAction) 
     : d_ctx{ctx}
     , d_workers{workers}
-    , d_ioCtx{2048} // NOTE: these are CQ entries, so it doesn't have to be too big
-                    // assuming the user is calling processEvents() adequately
+    , d_ioCtx{MAX_SOCKETS_ALLOWED}
     , d_numSkReads{0}
     , d_packetAction{packetAction}
 {

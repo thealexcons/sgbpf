@@ -24,8 +24,11 @@ with open("workers.cfg", "w") as f:
 
 exe = f"./worker{'_' + dataMode if dataMode != '' else ''}"
 
+def get_cpu(idx):
+    return idx % (len(os.sched_getaffinity(0)) - 1)
+
 procs = [ 
-    subprocess.Popen([exe, str(i)], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE) 
+    subprocess.Popen([exe, str(i), str(get_cpu(i))], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE) 
     for i in portRange
 ]
 

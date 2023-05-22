@@ -65,21 +65,27 @@ int main(int argc, char* argv[]) {
     auto workers = Worker::fromFile("workers.cfg");
     ScatterGatherService service{workers};
 
-    auto start = std::chrono::high_resolution_clock::now();
+    // auto start = std::chrono::high_resolution_clock::now();
 
-    // assume requests are sequential
+    uint32_t data[1024]; // reserve enough memory for the aggregated data
+    std::vector<uint64_t> times;
+    times.reserve(numRequests);
     for (auto i = 0; i < numRequests; ++i) {
+        BenchmarkTimer timer{times};
         service.scatter("SCATTER", 8);
 
-        uint32_t data[1024]; // reserve enough memory
         memset(data, 0, sizeof(data));
         service.gather<uint32_t>(data);
     }
 
-    auto end_time = std::chrono::high_resolution_clock::now();
-    auto elapsed_time = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start);
-    std::cout << "Total time = " << elapsed_time.count() << " us - " 
-                << "Num requests = " << numRequests 
-                << " , Num Workers = " << workers.size() 
-                << std::endl;
+    std::cout << "Avg unloaded latency: " << BenchmarkTimer::avgTime(times) << " us\n";
+    std::cout << "Median unloaded latency: " << BenchmarkTimer::medianTime(times) << " us\n";
+    std::cout << "Std dev unloaded latency: " << BenchmarkTimer::stdDev(times) << " us\n";
+
+    // auto end_time = std::chrono::high_resolution_clock::now();
+    // auto elapsed_time = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start);
+    // std::cout << "Total time = " << elapsed_time.count() << " us - " 
+    //             << "Num requests = " << numRequests 
+    //             << " , Num Workers = " << workers.size() 
+    //             << std::endl;
 }

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <thread>
+#include <cmath>
 
 #include <net/if.h>
 #include <unistd.h>
@@ -36,6 +37,15 @@ public:
 
     }
 
+    static double stdDev(const std::vector<uint64_t>& times) {
+        auto mean = avgTime(times);
+        double stdDev = 0.0;
+        for(auto i = 0; i < times.size(); ++i) {
+            stdDev += std::pow(times[i] - mean, 2);
+        }
+        return std::sqrt(stdDev / times.size());
+    }
+
     static double avgTime(const std::vector<uint64_t>& times) {
         int sum = 0;
         for (const auto& num : times) {
@@ -66,6 +76,9 @@ int main(int argc, char** argv) {
         std::cerr << "Invalid usage. Correct usage: " << argv[0] << " <path/to/bpfobjs> <ifname>" << std::endl;
         return 1;
     }
+
+    int reqs = atoi(argv[3]);
+
     // sudo ./sg_program bpfobjs lo
     // export OUTPUT_BPF_OBJ_DIR=$(pwd)/bpfobjs
 
@@ -75,45 +88,95 @@ int main(int argc, char** argv) {
     sgbpf::Context ctx{argv[1], argv[2]};
 
     auto workers = sgbpf::Worker::fromFile("workers.cfg");
-    sgbpf::Service service{ctx, workers};
+    sgbpf::Service service{ctx, workers, sgbpf::PacketAction::Discard};
     
     // int flags = fcntl(sg.ctrlSkFd(), F_GETFL, 0);
     // fcntl(service.ctrlSkFd(), F_SETFL, flags | O_NONBLOCK);
 
     // EXAMPLE 1: Vector-based data (with in-kernel aggregation)
     sgbpf::ReqParams params; // set params here....
-    params.completionPolicy = sgbpf::GatherCompletionPolicy::WaitN;
-    params.numWorkersToWait = 10;
+    params.completionPolicy = sgbpf::GatherCompletionPolicy::WaitAll;
+    params.numWorkersToWait = 20;
     params.timeout = std::chrono::microseconds{100*1000}; // 10 ms
+
     
-    constexpr int reqs = 1;
+    // io_uring ring;
+    // io_uring_params ringParams;
+    // memset(&ringParams, 0, sizeof(ringParams));
+
+    // if (io_uring_queue_init_params(1024, &ring, &ringParams) < 0)
+    //     throw std::runtime_error{"Failed to initialise io_uring queue"};
+
+    // // Preallocate and register buffers to receive the packets in
+    // char* buffer = new char[reqs * sizeof(sg_msg_t)];
+
+    // io_uring_sqe* sqe = io_uring_get_sqe(&ring);
+    // io_uring_prep_provide_buffers(sqe, buffer, sizeof(sg_msg_t), reqs, 0, 0);
+    // io_uring_submit(&ring);
+    // io_uring_cqe* cqe;
+    // io_uring_wait_cqe(&ring, &cqe);
+    // if (cqe->res < 0)
+    //     throw std::runtime_error{"Failed to provide io_uring buffers to the kernel"};
+    // io_uring_cqe_seen(&ring, cqe);
+    
+    sg_msg_t buf;
     std::vector<uint64_t> times;
     times.reserve(reqs);
-    auto start = std::chrono::high_resolution_clock::now();
-    for (auto i = 0u; i < reqs; i++) {
-        // BenchmarkTimer t{times};
-        auto req = service.scatter("SCATTER", 8, params);
+    // auto start = std::chrono::high_resolution_clock::now();
+    for (int i = 0; i < reqs; i++) {
+        BenchmarkTimer t{times};
+        // sqe = io_uring_get_sqe(&ring);
+        // io_uring_prep_recv(sqe, service.ctrlSkFd(), NULL, sizeof(sg_msg_t), 0);
+        // io_uring_sqe_set_flags(sqe, IOSQE_BUFFER_SELECT);
+        // sqe->buf_group = 0;
+        // sqe->user_data = 123;
 
-        sg_msg_t buf;
+        auto req = service.scatter("SCATTER", 8);
+        // io_uring_submit(&ring);
+
+        // unsigned count = 0;
+        // unsigned head;
+        // io_uring_for_each_cqe(&ring, head, cqe) {
+        //     ++count;
+        //     if (cqe->user_data == 123) {
+        //         auto bid = cqe->flags >> IORING_CQE_BUFFER_SHIFT;
+        //         auto resp = (sg_msg_t*) (buffer + bid * sizeof(sg_msg_t));
+        //         assert(resp->hdr.req_id == req->id()); // not guaranteed to be in order
+        //         // assert(((uint32_t*)resp->body)[10] == workers.size() * 10);
+        //         reqIDs.push_back(resp->hdr.req_id);
+        //     }
+        // }
+        // io_uring_cq_advance(&ring, count);
+
         auto b = read(service.ctrlSkFd(), &buf, sizeof(sg_msg_t));
         assert(b == sizeof(sg_msg_t));
-        assert(buf.hdr.req_id == req->id());
 
         service.processEvents(req->id());
-
-        // for (const auto& [wfd, ptrList] : req->bufferPointers()) {
-        //     auto msg = (sg_msg_t*) req->data(ptrList[0]);
-        //     std::cout << "--- INDIVIDUAL PK: " << ((uint32_t*)msg->body)[33]  << std::endl;
-        // }
     }
-    auto end_time = std::chrono::high_resolution_clock::now();
-    auto elapsed_time = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start);
+
+    std::cout << "Avg unloaded latency: " << BenchmarkTimer::avgTime(times) << " us\n";
+    std::cout << "Median unloaded latency: " << BenchmarkTimer::medianTime(times) << " us\n";
+    std::cout << "Std dev unloaded latency: " << BenchmarkTimer::stdDev(times) << " us\n";
+
+    // auto end_time = std::chrono::high_resolution_clock::now();
+    // auto elapsed_time = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start);
+    // std::cout << "Total time = " << elapsed_time.count() << " us - " 
+    //             << "Num requests = " << reqs 
+    //             << " , Num Workers = " << workers.size() 
+    //             << std::endl;
+
+    // // this is not guaranteed... need to wait for all to arrive
+    // uint32_t sum = 0;
+    // uint32_t expected = reqs * (reqs + 1) / 2;
+    // for (auto id : reqIDs)
+    //     sum += id;
+
+    // std::cout << sum << " " << expected << std::endl;
+    // assert(sum == expected);
 
     // buf size (8192) = 187886 us
     // buf size (1024) = 57917 us
 
-
-    std::cout << "Total elapsed time (us) = " << elapsed_time.count() << '\n';
     // std::cout << "Avg throughput (req/s) = " << reqs / (std::chrono::duration_cast<std::chrono::seconds>(elapsed_time).count()) << std::endl;
 
     // while (1) {

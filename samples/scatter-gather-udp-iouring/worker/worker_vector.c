@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -10,6 +11,8 @@
 #include <stdlib.h>
 #include <signal.h>
 #include <errno.h>
+#include <pthread.h>
+#include <sched.h>
 
 #define WORKER_PORT 5555
 
@@ -24,9 +27,12 @@ int main(int argc, char *argv[]) {
 
   signal(SIGPOLL, sig_handler); // Register signal handler
 
+  int cpu = 0;
   short worker_port = WORKER_PORT;
-  if (argc >= 2)
+  if (argc >= 3) {
     worker_port = atoi(argv[1]);
+    cpu = atoi(argv[2]);
+  }
 
   // char message[1024];
   int sock;
@@ -60,7 +66,12 @@ int main(int argc, char *argv[]) {
   } else {
       fprintf(stdout, "Recv buf size set to %d\n", y);
   }
-  
+
+  // Pin to the CPU num provided
+  cpu_set_t cpuset;
+  CPU_ZERO(&cpuset);
+  CPU_SET(cpu, &cpuset);
+  sched_setaffinity(0, sizeof(cpu_set_t), &cpuset);
 
   /* Bind our local address so that the client can send to us */
   memset(&name, 0, sizeof(name));

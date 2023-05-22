@@ -83,6 +83,10 @@ int main(int argc, char* argv[]) {
         uint32_t data[1024]; // reserve enough memory
         memset(data, 0, sizeof(data));
         service.gather<uint32_t>(data);
+
+        // for (int i = 0; i < 100; i++) {
+        //     assert(data[i] == workers.size()*i);
+        // }
     }
 
     auto end_time = std::chrono::high_resolution_clock::now();

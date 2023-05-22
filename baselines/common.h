@@ -7,6 +7,8 @@
 #include <cstring>
 #include <arpa/inet.h>
 #include <chrono>
+#include <cmath>
+#include <algorithm>
 
 #include <linux/ip.h>
 #include <linux/udp.h>
@@ -88,5 +90,60 @@ public:
     }
 };
 
+
+class BenchmarkTimer {
+public:
+    BenchmarkTimer(std::vector<uint64_t>& times)
+        : start_time{std::chrono::high_resolution_clock::now()}
+        , times_vec{times}
+    {}
+    
+    ~BenchmarkTimer() {
+        auto end_time = std::chrono::high_resolution_clock::now();
+        auto elapsed_time = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+        times_vec.push_back(elapsed_time.count());
+    }
+
+    static uint64_t maxTime(const std::vector<uint64_t>& times) {
+        return *std::max_element(times.begin(), times.end());
+    }
+
+    static uint64_t minTime(const std::vector<uint64_t>& times) {
+        return *std::min_element(times.begin(), times.end());
+
+    }
+
+    static double avgTime(const std::vector<uint64_t>& times) {
+        int sum = 0;
+        for (const auto& num : times) {
+            sum += num;
+        }
+        return static_cast<double>(sum) / times.size();
+    }
+
+    static double stdDev(const std::vector<uint64_t>& times) {
+        auto mean = avgTime(times);
+        double stdDev = 0.0;
+        for(auto i = 0; i < times.size(); ++i) {
+            stdDev += pow(times[i] - mean, 2);
+        }
+        return std::sqrt(stdDev / times.size());
+    }
+
+    static uint64_t medianTime(std::vector<uint64_t> times) {
+        size_t n = times.size();
+        std::sort(times.begin(), times.end());
+        
+        if (n % 2 == 0) {
+            return (times[n/2 - 1] + times[n/2]) / 2.0;
+        } else {
+            return times[n/2];
+        }
+    }
+
+private:
+    std::chrono::high_resolution_clock::time_point  start_time;
+    std::vector<uint64_t>&                          times_vec;
+};
 
 #endif // !COMMON_UTILS_H

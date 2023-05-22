@@ -82,7 +82,7 @@ Service::Service(Context& ctx,
                  PacketAction packetAction) 
     : d_ctx{ctx}
     , d_workers{workers}
-    , d_ioCtx{MAX_SOCKETS_ALLOWED}
+    , d_ioCtx{d_workers.size() * 4}
     , d_numSkReads{0}
     , d_packetAction{packetAction}
 {

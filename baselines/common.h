@@ -125,7 +125,7 @@ public:
     static double stdDev(const std::vector<uint64_t>& times) {
         auto mean = avgTime(times);
         double stdDev = 0.0;
-        for(auto i = 0; i < times.size(); ++i) {
+        for(auto i = 0u; i < times.size(); ++i) {
             stdDev += pow(times[i] - mean, 2);
         }
         return std::sqrt(stdDev / times.size());
@@ -148,12 +148,12 @@ private:
 };
 
 
-inline void increaseMaxNumFiles(std::vector<Worker>& workers)
+inline void increaseMaxNumFiles()
 {
     struct rlimit rlim;
     if (getrlimit(RLIMIT_NOFILE, &rlim) == 0) {
-        std::cout << "Num FDs Soft limit: " << rlim.rlim_cur << std::endl;
-        std::cout << "Num FDs Hard limit: " << rlim.rlim_max << std::endl;
+        // std::cout << "Num FDs Soft limit: " << rlim.rlim_cur << std::endl;
+        // std::cout << "Num FDs Hard limit: " << rlim.rlim_max << std::endl;
         rlim.rlim_cur = rlim.rlim_max;
         if (setrlimit(RLIMIT_NOFILE, &rlim) == -1) {
             std::cout << "Unable to set file descriptor limits" << std::endl;

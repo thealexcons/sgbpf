@@ -21,7 +21,7 @@ public:
     ScatterGatherService(std::vector<Worker>& workers)
         : d_workers{workers}
     {
-        increaseMaxNumFiles(workers);
+        increaseMaxNumFiles();
 
         d_events = new epoll_event[d_workers.size()];
 

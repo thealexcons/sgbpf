@@ -25,8 +25,9 @@ public:
     ScatterGatherService(std::vector<Worker>& workers)
         : d_workers{workers}
     {
-        increaseMaxNumFiles(workers);
+        increaseMaxNumFiles();
 
+        std::cout << "num workers: " << d_workers.size() << std::endl;
         d_msgHdrs = new msghdr[d_workers.size()];
         d_buffers = new char[sizeof(sg_msg_t) * d_workers.size()];
 
@@ -34,7 +35,7 @@ public:
         io_uring_params params;
         memset(&params, 0, sizeof(params));
 
-        if (io_uring_queue_init_params(1024, &d_ring, &params) < 0)
+        if (io_uring_queue_init_params(d_workers.size() * 3, &d_ring, &params) < 0)
             throw std::runtime_error{"Failed to initialise io_uring queue"};
 
         // Preallocate and register buffers to receive the packets in

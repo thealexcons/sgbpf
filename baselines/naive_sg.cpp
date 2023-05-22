@@ -16,7 +16,9 @@ class ScatterGatherService {
 public:
     ScatterGatherService(std::vector<Worker>& workers)
         : d_workers{workers}
-    {}
+    {
+        increaseMaxNumFiles(workers);
+    }
 
     void scatter(const char* msg, size_t len) {
         // prepare a dummy sg_msg_t to send

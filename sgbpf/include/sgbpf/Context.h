@@ -9,7 +9,9 @@
 #include "Common.h"
 
 #include <filesystem>
+#include <iostream>
 #include <net/if.h>
+#include <sys/resource.h>
 #include <liburing.h>
 
 namespace sgbpf {

@@ -31,6 +31,21 @@ Context::Context(const char* bpfObjectsPath, const char* interfaceName)
     auto customAggregationProg = d_aggregationProgObject.findProgramByName("aggregation_prog").value();
     auto customAggregationProgFd = customAggregationProg.fd();
     vecAggProgsMap.update(&progIdx, &customAggregationProgFd);
+
+    // Increase max num open files for large number of workers
+    rlimit rlim;
+    if (getrlimit(RLIMIT_NOFILE, &rlim) == 0) {
+        auto curr = rlim.rlim_cur;
+        rlim.rlim_cur = rlim.rlim_max;
+        if (setrlimit(RLIMIT_NOFILE, &rlim) == -1) {
+            std::cout << "[sgbpf - WARNING] Unable to increase file descriptor limits from " 
+                      << curr << " to " << rlim.rlim_max << std::endl;
+            exit(1);
+        }
+    } else {
+        std::cout << "[sgbpf - WARNING] Unable to get file descriptor limits, continuing" << std::endl;
+    }
+
 }
 
 Context::~Context()

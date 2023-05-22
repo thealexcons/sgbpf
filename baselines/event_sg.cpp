@@ -21,6 +21,8 @@ public:
     ScatterGatherService(std::vector<Worker>& workers)
         : d_workers{workers}
     {
+        increaseMaxNumFiles(workers);
+
         d_events = new epoll_event[d_workers.size()];
 
         // Register the worker sockets with epoll for read events
@@ -89,7 +91,6 @@ public:
     }
 
 };
-
 
 int main(int argc, char* argv[]) {
 

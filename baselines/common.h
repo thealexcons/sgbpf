@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cmath>
 #include <algorithm>
+#include <sys/resource.h>
 
 #include <linux/ip.h>
 #include <linux/udp.h>
@@ -145,5 +146,23 @@ private:
     std::chrono::high_resolution_clock::time_point  start_time;
     std::vector<uint64_t>&                          times_vec;
 };
+
+
+inline void increaseMaxNumFiles(std::vector<Worker>& workers)
+{
+    struct rlimit rlim;
+    if (getrlimit(RLIMIT_NOFILE, &rlim) == 0) {
+        std::cout << "Num FDs Soft limit: " << rlim.rlim_cur << std::endl;
+        std::cout << "Num FDs Hard limit: " << rlim.rlim_max << std::endl;
+        rlim.rlim_cur = rlim.rlim_max;
+        if (setrlimit(RLIMIT_NOFILE, &rlim) == -1) {
+            std::cout << "Unable to set file descriptor limits" << std::endl;
+            exit(1);
+        }
+    } else {
+        std::cout << "Unable to get file descriptor limits." << std::endl;
+    }
+}
+
 
 #endif // !COMMON_UTILS_H

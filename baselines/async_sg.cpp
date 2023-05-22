@@ -25,6 +25,8 @@ public:
     ScatterGatherService(std::vector<Worker>& workers)
         : d_workers{workers}
     {
+        increaseMaxNumFiles(workers);
+
         d_msgHdrs = new msghdr[d_workers.size()];
         d_buffers = new char[sizeof(sg_msg_t) * d_workers.size()];
 

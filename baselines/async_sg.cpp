@@ -182,8 +182,8 @@ int main(int argc, char* argv[]) {
 
         if (gatherCount == throughputCalculationRate) {
             auto end_time = std::chrono::high_resolution_clock::now();
-            auto elapsed_time = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start);
-            auto tput = gatherCount / static_cast<double>(elapsed_time.count());
+            auto elapsed_time = std::chrono::duration_cast<std::chrono::seconds>(end_time - start);
+            auto tput = gatherCount / static_cast<double>(elapsed_time.count()) * 1000000;
             std::cout << "Throughput: " << tput << " req/s\n";
             gatherCount = 0;
             start = std::chrono::high_resolution_clock::now();

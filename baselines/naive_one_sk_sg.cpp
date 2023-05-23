@@ -62,38 +62,54 @@ public:
 
 };
 
+void throughput_benchmark(int numRequests) {
+    std::cout << "Running throughput experiment" << std::endl;
+
+    auto workers = Worker::fromFile("workers.cfg", false);
+    ScatterGatherService service{workers};
+
+    // ... 
+    // confirm that async one is good
+}
+
+void unloaded_latency_benchmark(int numRequests) {
+    std::cout << "Running unloaded latency experiment" << std::endl;
+
+    auto workers = Worker::fromFile("workers.cfg", false);
+    ScatterGatherService service{workers};
+
+    uint32_t data[1024]; // reserve enough memory for the aggregated data
+    std::vector<uint64_t> times;
+    times.reserve(numRequests);
+    for (auto i = 0; i < numRequests; ++i) {
+        BenchmarkTimer timer{times};
+        service.scatter("SCATTER", 8);
+
+        memset(data, 0, sizeof(data));
+        service.gather<uint32_t>(data);
+    }
+
+    std::cout << "Num workers: " << workers.size() << std::endl;
+    std::cout << "Avg unloaded latency: " << BenchmarkTimer::avgTime(times) << " us\n";
+    std::cout << "Median unloaded latency: " << BenchmarkTimer::medianTime(times) << " us\n";
+    std::cout << "Std dev unloaded latency: " << BenchmarkTimer::stdDev(times) << " us\n";
+
+}
+
 
 int main(int argc, char* argv[]) {
 
-    if (argc < 2) {
+    if (argc < 3) {
         std::cerr << "Please provide the number of requests to send" << std::endl;
         return 1;
     }
     int numRequests = atoi(argv[1]);
+    std::string option = argv[2];
 
-    auto workers = Worker::fromFile("workers.cfg");
-    ScatterGatherService service{workers};
-
-    auto start = std::chrono::high_resolution_clock::now();
-
-    // assume requests are sequential
-    for (auto i = 0; i < numRequests; ++i) {
-        service.scatter("SCATTER", 8);
-
-        uint32_t data[1024]; // reserve enough memory
-        memset(data, 0, sizeof(data));
-        service.gather<uint32_t>(data);
-
-        // for (int i = 0; i < 100; i++) {
-        //     assert(data[i] == workers.size()*i);
-        // }
+    if (option == "throughput") {
+        throughput_benchmark(numRequests);
     }
-
-    auto end_time = std::chrono::high_resolution_clock::now();
-    auto elapsed_time = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start);
-    std::cout << "Total time = " << elapsed_time.count() << " us - " 
-                << "Num requests = " << numRequests 
-                << " , Num Workers = " << workers.size() 
-                << std::endl;
-
+    else {
+        unloaded_latency_benchmark(numRequests);
+    }
 }

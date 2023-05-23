@@ -92,23 +92,23 @@ public:
 
 };
 
-int main(int argc, char* argv[]) {
+void throughput_benchmark(int numRequests) {
+    std::cout << "Running throughput experiment" << std::endl;
 
-    // Note: this implementation uses per-worker sockets to demonstrate the benefits
-    // of an event notification system when handling multiple sockets. Otherwise,
-    // it would have no advantage over using a single socket approach.
-
-    if (argc < 2) {
-        std::cerr << "Please provide the number of requests to send" << std::endl;
-        return 1;
-    }
-    int numRequests = atoi(argv[1]);
-
-    auto workers = Worker::fromFile("workers.cfg");
+    auto workers = Worker::fromFile("workers.cfg", true);
     ScatterGatherService service{workers};
 
-    // auto start = std::chrono::high_resolution_clock::now();
-    
+    // ... 
+    // confirm that async one is good
+
+}
+
+void unloaded_latency_benchmark(int numRequests) {
+    std::cout << "Running unloaded latency experiment" << std::endl;
+
+    auto workers = Worker::fromFile("workers.cfg", true);
+    ScatterGatherService service{workers};
+
     uint32_t data[1024]; // reserve enough memory for the aggregated data
     std::vector<uint64_t> times;
     times.reserve(numRequests);
@@ -120,14 +120,30 @@ int main(int argc, char* argv[]) {
         service.gather<uint32_t>(data);
     }
 
+    std::cout << "Num workers: " << workers.size() << std::endl;
     std::cout << "Avg unloaded latency: " << BenchmarkTimer::avgTime(times) << " us\n";
     std::cout << "Median unloaded latency: " << BenchmarkTimer::medianTime(times) << " us\n";
     std::cout << "Std dev unloaded latency: " << BenchmarkTimer::stdDev(times) << " us\n";
+}
 
-    // auto end_time = std::chrono::high_resolution_clock::now();
-    // auto elapsed_time = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start);
-    // std::cout << "Total time = " << elapsed_time.count() << " us - " 
-    //             << "Num requests = " << numRequests 
-    //             << " , Num Workers = " << workers.size() 
-    //             << std::endl;
+int main(int argc, char* argv[]) {
+
+    // Note: this implementation uses per-worker sockets to demonstrate the benefits
+    // of an event notification system when handling multiple sockets. Otherwise,
+    // it would have no advantage over using a single socket approach.
+
+    if (argc < 3) {
+        std::cerr << "Usage: " << argv[0] << " <num reqs> <mode>" << std::endl;
+        return 1;
+    }
+    int numRequests = atoi(argv[1]);
+    std::string option = argv[2];
+
+    if (option == "throughput") {
+        throughput_benchmark(numRequests);
+    }
+    else {
+        unloaded_latency_benchmark(numRequests);
+    }
+
 }

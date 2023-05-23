@@ -45,7 +45,7 @@ private:
 public:
 
     // CONSTRUCTORS
-    Worker(std::string ipAddress, uint16_t port) {
+    Worker(std::string ipAddress, uint16_t port, bool openSocket) {
         uint32_t ipAddrNet;
         if (!inet_pton(AF_INET, ipAddress.c_str(), &ipAddrNet))
             throw std::runtime_error{"Invalid IPv4 address in worker config"};
@@ -55,7 +55,8 @@ public:
         d_destAddr.sin_port = htons(port);
         d_destAddr.sin_addr.s_addr = ipAddrNet;
 
-        d_skFd = socket(AF_INET, SOCK_DGRAM, 0);
+        if (openSocket)
+            d_skFd = socket(AF_INET, SOCK_DGRAM, 0);
     }
 
     // GETTERS
@@ -63,7 +64,7 @@ public:
     sockaddr_in* destAddr() { return &d_destAddr; }
 
     // STATIC METHODS
-    static std::vector<Worker> fromFile(const std::string& filePath) {
+    static std::vector<Worker> fromFile(const std::string& filePath, bool openSocket) {
         std::vector<Worker> dests;
         std::ifstream file(filePath);
         if (file.is_open()) {
@@ -82,7 +83,7 @@ public:
                 
                 auto port = static_cast<uint16_t>(std::stoi(std::string{ptr, strlen(ptr)}));
 
-                dests.emplace_back(ipStr, port);
+                dests.emplace_back(ipStr, port, openSocket);
             }
             file.close();
         }
@@ -154,13 +155,18 @@ inline void increaseMaxNumFiles()
     if (getrlimit(RLIMIT_NOFILE, &rlim) == 0) {
         // std::cout << "Num FDs Soft limit: " << rlim.rlim_cur << std::endl;
         // std::cout << "Num FDs Hard limit: " << rlim.rlim_max << std::endl;
-        rlim.rlim_cur = rlim.rlim_max;
+        rlim.rlim_cur = 32000;
         if (setrlimit(RLIMIT_NOFILE, &rlim) == -1) {
             std::cout << "Unable to set file descriptor limits" << std::endl;
             exit(1);
         }
     } else {
         std::cout << "Unable to get file descriptor limits." << std::endl;
+    }
+
+    struct rlimit rlim1;
+    if (getrlimit(RLIMIT_NOFILE, &rlim1) == 0) {
+        std::cout << "Updated soft limit: " << rlim1.rlim_cur << std::endl;
     }
 }
 

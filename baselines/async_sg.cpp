@@ -18,6 +18,7 @@ class ScatterGatherService {
     msghdr*                    d_msgHdrs;
     uint16_t                   d_bgid = 42;
     char*                      d_buffers;
+    int                        d_skFd;
 
     constexpr static uint64_t READ_OP = 0xdeadbeef;
 
@@ -26,6 +27,8 @@ public:
         : d_workers{workers}
     {
         increaseMaxNumFiles();
+
+        d_skFd = socket(AF_INET, SOCK_DGRAM, 0);
 
         std::cout << "num workers: " << d_workers.size() << std::endl;
         d_msgHdrs = new msghdr[d_workers.size()];
@@ -80,12 +83,12 @@ public:
 
             // Add write
             io_uring_sqe *sqe = io_uring_get_sqe(&d_ring);
-            io_uring_prep_sendmsg(sqe, worker.socketFd(), &d_msgHdrs[i], 0);
+            io_uring_prep_sendmsg(sqe, d_skFd, &d_msgHdrs[i], 0);
             io_uring_sqe_set_flags(sqe, 0);
 
             // Add read
             sqe = io_uring_get_sqe(&d_ring);
-            io_uring_prep_recv(sqe, worker.socketFd(), NULL, sizeof(sg_msg_t), 0);
+            io_uring_prep_recv(sqe, d_skFd, NULL, sizeof(sg_msg_t), 0);
             io_uring_sqe_set_flags(sqe, IOSQE_BUFFER_SELECT);
             sqe->buf_group = d_bgid;
             sqe->user_data = READ_OP;
@@ -128,19 +131,86 @@ public:
 
 };
 
+void throughput_benchmark(int numRequests) {
+    std::cout << "Running throughput experiment" << std::endl;
+
+    auto workers = Worker::fromFile("workers.cfg", false);
+    ScatterGatherService service{workers};
+
+    auto totalGathers = 0;
+    auto throughputCalculationRate = 200;
+    auto outstandingReqs = 64;
+    for (auto i = 0; i < outstandingReqs; i++) {
+        service.scatter("SCATTER", 8);
+    }
+    auto gatherCount = 0;
+    auto start = std::chrono::high_resolution_clock::now();
+    while (totalGathers < numRequests) {
+        // wait for gather to complete
+        uint32_t data[1024];
+        memset(data, 0, sizeof(data));
+        service.gather<uint32_t>(data);
+        gatherCount++;
+        totalGathers++;
+
+        // double check that this code looks correct with marios
+        // for now, just do throughput experiments and forget about large fan-outs
+
+        // send out another gather
+        service.scatter("SCATTER", 8);
+
+        if (gatherCount == throughputCalculationRate) {
+            auto end_time = std::chrono::high_resolution_clock::now();
+            auto elapsed_time = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start);
+            auto tput = gatherCount / static_cast<double>(elapsed_time.count()) * 1000000;
+            std::cout << "Throughput: " << tput << " req/s\n";
+            gatherCount = 0;
+            start = std::chrono::high_resolution_clock::now();
+        }
+    }
+
+}
+
+void unloaded_latency_benchmark(int numRequests) {
+    std::cout << "Running unloaded latency experiment" << std::endl;
+
+    auto workers = Worker::fromFile("workers.cfg", false);
+    ScatterGatherService service{workers};
+
+    uint32_t data[1024]; // reserve enough memory for the aggregated data
+    std::vector<uint64_t> times;
+    times.reserve(numRequests);
+    for (auto i = 0; i < numRequests; ++i) {
+        BenchmarkTimer timer{times};
+        service.scatter("SCATTER", 8);
+
+        memset(data, 0, sizeof(data));
+        service.gather<uint32_t>(data);
+    }
+
+    std::cout << "Num workers: " << workers.size() << std::endl;
+    std::cout << "Avg unloaded latency: " << BenchmarkTimer::avgTime(times) << " us\n";
+    std::cout << "Median unloaded latency: " << BenchmarkTimer::medianTime(times) << " us\n";
+    std::cout << "Std dev unloaded latency: " << BenchmarkTimer::stdDev(times) << " us\n";
+} 
+
 
 int main(int argc, char* argv[]) {
 
-    if (argc < 2) {
-        std::cerr << "Please provide the number of requests to send" << std::endl;
+    if (argc < 3) {
+        std::cerr << "Usage: " << argv[0] << " <num reqs> <mode>" << std::endl;
         return 1;
     }
     int numRequests = atoi(argv[1]);
+    std::string option = argv[2];
 
-    auto workers = Worker::fromFile("workers.cfg");
-    ScatterGatherService service{workers};
-
-
+    if (option == "throughput") {
+        throughput_benchmark(numRequests);
+    }
+    else {
+        unloaded_latency_benchmark(numRequests);
+    }
+    
     /*
     start time
     n scatters
@@ -158,74 +228,5 @@ int main(int argc, char* argv[]) {
             gather_count = 0
             start_time = now()
     }
-
-    auto throughputCalculationRate = 64;
-    auto outstandingReqs = 64;
-    for (auto i = 0; i < outstandingReqs; i++) {
-        service.scatter("SCATTER", 8);
-    }
-    auto gatherCount = 0;
-    auto start = std::chrono::high_resolution_clock::now();
-    while (1) {
-        // wait for gather to complete
-        uint32_t data[1024];
-        memset(data, 0, sizeof(data));
-        service.gather<uint32_t>(data);
-        for (int i = 0; i < 25; i++) {
-            std::cout << data[i] << std::endl;
-            // assert(data[i] == workers.size()*i);
-        }
-        gatherCount++;
-
-        // send out another gather
-        service.scatter("SCATTER", 8);
-
-        if (gatherCount == throughputCalculationRate) {
-            auto end_time = std::chrono::high_resolution_clock::now();
-            auto elapsed_time = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start);
-            auto tput = gatherCount / static_cast<double>(elapsed_time.count());
-            std::cout << "Throughput: " << tput << " req/s\n";
-            gatherCount = 0;
-            start = std::chrono::high_resolution_clock::now();
-        }
-    }
     */
-
-    uint32_t data[1024]; // reserve enough memory for the aggregated data
-    std::vector<uint64_t> times;
-    times.reserve(numRequests);
-    for (auto i = 0; i < numRequests; ++i) {
-        BenchmarkTimer timer{times};
-        service.scatter("SCATTER", 8);
-
-        memset(data, 0, sizeof(data));
-        service.gather<uint32_t>(data);
-    }
-
-    std::cout << "Avg unloaded latency: " << BenchmarkTimer::avgTime(times) << " us\n";
-    std::cout << "Median unloaded latency: " << BenchmarkTimer::medianTime(times) << " us\n";
-    std::cout << "Std dev unloaded latency: " << BenchmarkTimer::stdDev(times) << " us\n";
-
-
-    // for (auto i = 0; i < numRequests; ++i) {
-
-    //     // start time
-    //     service.scatter("SCATTER", 8);
-
-    //     uint32_t data[1024]; // reserve enough memory
-    //     memset(data, 0, sizeof(data));
-    //     service.gather<uint32_t>(data);
-    //     // end time
-
-        // for (int i = 0; i < 100; i++) {
-        //     assert(data[i] == workers.size()*i);
-        // }
-    // }
-
-    // auto end_time = std::chrono::high_resolution_clock::now();
-    // auto elapsed_time = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start);
-    // std::cout << "Total time = " << elapsed_time.count() << " us - " 
-    //             << "Num requests = " << numRequests 
-    //             << " , Num Workers = " << workers.size() 
-    //             << std::endl;
 }

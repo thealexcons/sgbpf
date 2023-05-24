@@ -138,8 +138,9 @@ void throughput_benchmark(int numRequests) {
     ScatterGatherService service{workers};
 
     auto totalGathers = 0;
-    auto throughputCalculationRate = 200;
-    auto outstandingReqs = 64;
+    auto throughputCalculationRate = 200;   // print xput every n ops
+    
+    auto outstandingReqs = 128;
     for (auto i = 0; i < outstandingReqs; i++) {
         service.scatter("SCATTER", 8);
     }
@@ -150,20 +151,18 @@ void throughput_benchmark(int numRequests) {
         uint32_t data[1024];
         memset(data, 0, sizeof(data));
         service.gather<uint32_t>(data);
+
         gatherCount++;
         totalGathers++;
 
-        // double check that this code looks correct with marios
-        // for now, just do throughput experiments and forget about large fan-outs
-
-        // send out another gather
+        // send out another scatter
         service.scatter("SCATTER", 8);
 
         if (gatherCount == throughputCalculationRate) {
             auto end_time = std::chrono::high_resolution_clock::now();
             auto elapsed_time = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start);
             auto tput = gatherCount / static_cast<double>(elapsed_time.count()) * 1000000;
-            std::cout << "Throughput: " << tput << " req/s\n";
+            std::cout << "Throughput: " << tput << " req/s (" << totalGathers << " ops completed)\n" ;
             gatherCount = 0;
             start = std::chrono::high_resolution_clock::now();
         }

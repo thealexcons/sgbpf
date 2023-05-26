@@ -445,6 +445,8 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         skb->mark = 0xdeadbeef;
     
         // bpf_ringbuf_query(&map_ringbuf, BPF_RB_AVAIL_DATA);
+        // __u32 sample = 42;
+        // bpf_ringbuf_output(&map_ringbuf, &sample, sizeof(__u32), 0);
     }
 
     return TC_ACT_OK;

@@ -7,7 +7,8 @@ Request::Request(int requestID,
                  const ReqParams& params,
                  const std::vector<char*>* packetBufferPool,
                  const std::vector<Worker>* workers,
-                 bool allowPackets)
+                 PacketAction packetAction,
+                 CtrlSockMode ctrlSockMode)
     : d_isActive{true}
     , d_requestID{requestID}
     , d_workers{workers}
@@ -17,8 +18,10 @@ Request::Request(int requestID,
     , d_timeOut{params.timeout}
     , d_completionPolicy{params.completionPolicy}
     , d_numWorkersToWait{params.numWorkersToWait}
+    , d_ctrlSockMode{ctrlSockMode}
+    , d_ctrlSockReady{false}
 {
-    if (allowPackets) {
+    if (packetAction == PacketAction::Allow) {
         d_workerBufferPtrs.reserve(d_workers->size());
     }
 }

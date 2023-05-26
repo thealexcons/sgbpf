@@ -15,7 +15,7 @@ dataMode = sys.argv[4] if len(sys.argv) >= 5 else ""
 
 portRange = range(startPort, startPort + numServers)
 
-with open("workers.cfg", "w") as f:
+with open("../workers.cfg", "w") as f:
     for i in portRange:
         f.write(f"127.0.0.1:{i}")
         if i == startPort + numServers - 1:

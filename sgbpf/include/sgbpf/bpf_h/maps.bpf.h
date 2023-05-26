@@ -96,4 +96,9 @@ struct {
 
 // locked memory issue: ulimit -l unlimited 
 
+struct {
+	__uint(type, BPF_MAP_TYPE_RINGBUF);
+    __uint(max_entries, 256 * 1024 /* 256 KB */);
+} map_ringbuf SEC(".maps");
+
 #endif // MAPS_BPF_H

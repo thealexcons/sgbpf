@@ -16,7 +16,7 @@
 
 #define WORKER_PORT 5555
 
-#include "../common.h"
+#include "common.h"
 
 void sig_handler(int signum){
   fflush(stdout);

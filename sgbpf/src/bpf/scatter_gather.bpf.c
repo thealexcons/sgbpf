@@ -209,7 +209,7 @@ int scatter_prog(struct __sk_buff* skb) {
         rs->num_workers = sgh->hdr.num_pks;
 
         #ifdef BPF_DEBUG_PRINT
-            bpf_printk("Got num workers to WAIT = %d", rs->num_workers);
+        bpf_printk("Got num workers to WAIT = %d", rs->num_workers);
         #endif
 
         // Clone the outgoing packet to all the registered workers
@@ -280,7 +280,7 @@ int gather_prog(struct xdp_md* ctx) {
         return XDP_DROP;
 
     #ifdef BPF_DEBUG_PRINT
-    bpf_printk("got to gather XDP Prog with resp from worker %d", bpf_ntohs(worker.worker_port));
+    // bpf_printk("got to gather XDP Prog with resp from worker %d", bpf_ntohs(worker.worker_port));
     #endif
 
     // If this is a multi-packet message, forward the packet without aggregation
@@ -441,6 +441,10 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         bpf_skb_store_bytes(skb, SG_MSG_BODY_OFF, (char*)agg_entry->data, sizeof(RESP_VECTOR_TYPE) * RESP_MAX_VECTOR_SIZE, 0);
         bpf_skb_store_bytes(skb, UDP_DEST_OFF, ctrl_sk_port, sizeof(*ctrl_sk_port), BPF_F_RECOMPUTE_CSUM);
         clear_vector(agg_entry->data);
+
+        skb->mark = 0xdeadbeef;
+    
+        // bpf_ringbuf_query(&map_ringbuf, BPF_RB_AVAIL_DATA);
     }
 
     return TC_ACT_OK;

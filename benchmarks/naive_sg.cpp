@@ -17,6 +17,7 @@ public:
     ScatterGatherService(std::vector<Worker>& workers)
         : d_workers{workers}
     {
+        std::cout << "Workers loaded: " << workers.size() << std::endl;
         increaseMaxNumFiles();
     }
 
@@ -110,7 +111,6 @@ void unloaded_latency_benchmark(int numRequests) {
         service.gather<uint32_t>(data);
     }
 
-    std::cout << "Num workers: " << workers.size() << std::endl;
     std::cout << "Avg unloaded latency: " << BenchmarkTimer::avgTime(times) << " us\n";
     std::cout << "Median unloaded latency: " << BenchmarkTimer::medianTime(times) << " us\n";
     std::cout << "Std dev unloaded latency: " << BenchmarkTimer::stdDev(times) << " us\n";

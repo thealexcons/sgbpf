@@ -6,7 +6,7 @@ import sys, os, subprocess, time, signal, resource
 # This will generate a workers.cfg file and run the workers
 # for the number of seconds provided
 
-#<DATA_MODE> = "vector", "multipacket", ""
+#<DATA_MODE> = "vector", "multipacket", "scalar"
 
 startPort = int(sys.argv[1])
 numServers = int(sys.argv[2])

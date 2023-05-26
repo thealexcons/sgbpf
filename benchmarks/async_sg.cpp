@@ -26,11 +26,11 @@ public:
     ScatterGatherService(std::vector<Worker>& workers)
         : d_workers{workers}
     {
+        std::cout << "Workers loaded: " << workers.size() << std::endl;
         increaseMaxNumFiles();
 
         d_skFd = socket(AF_INET, SOCK_DGRAM, 0);
 
-        std::cout << "num workers: " << d_workers.size() << std::endl;
         d_msgHdrs = new msghdr[d_workers.size()];
         d_buffers = new char[sizeof(sg_msg_t) * d_workers.size()];
 
@@ -83,12 +83,12 @@ public:
 
             // Add write
             io_uring_sqe *sqe = io_uring_get_sqe(&d_ring);
-            io_uring_prep_sendmsg(sqe, d_skFd, &d_msgHdrs[i], 0);
+            io_uring_prep_sendmsg(sqe, worker.socketFd(), &d_msgHdrs[i], 0);
             io_uring_sqe_set_flags(sqe, 0);
 
             // Add read
             sqe = io_uring_get_sqe(&d_ring);
-            io_uring_prep_recv(sqe, d_skFd, NULL, sizeof(sg_msg_t), 0);
+            io_uring_prep_recv(sqe, worker.socketFd(), NULL, sizeof(sg_msg_t), 0);
             io_uring_sqe_set_flags(sqe, IOSQE_BUFFER_SELECT);
             sqe->buf_group = d_bgid;
             sqe->user_data = READ_OP;
@@ -134,7 +134,7 @@ public:
 void throughput_benchmark(int numRequests) {
     std::cout << "Running throughput experiment" << std::endl;
 
-    auto workers = Worker::fromFile("workers.cfg", false);
+    auto workers = Worker::fromFile("workers.cfg", true);
     ScatterGatherService service{workers};
 
     auto totalGathers = 0;
@@ -173,7 +173,7 @@ void throughput_benchmark(int numRequests) {
 void unloaded_latency_benchmark(int numRequests) {
     std::cout << "Running unloaded latency experiment" << std::endl;
 
-    auto workers = Worker::fromFile("workers.cfg", false);
+    auto workers = Worker::fromFile("workers.cfg", true);
     ScatterGatherService service{workers};
 
     uint32_t data[1024]; // reserve enough memory for the aggregated data
@@ -187,7 +187,6 @@ void unloaded_latency_benchmark(int numRequests) {
         service.gather<uint32_t>(data);
     }
 
-    std::cout << "Num workers: " << workers.size() << std::endl;
     std::cout << "Avg unloaded latency: " << BenchmarkTimer::avgTime(times) << " us\n";
     std::cout << "Median unloaded latency: " << BenchmarkTimer::medianTime(times) << " us\n";
     std::cout << "Std dev unloaded latency: " << BenchmarkTimer::stdDev(times) << " us\n";

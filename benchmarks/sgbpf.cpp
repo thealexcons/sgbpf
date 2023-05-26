@@ -77,6 +77,7 @@ void throughput_benchmark(int numRequests, sgbpf::Context& ctx) {
     std::cout << "Running throughput experiment (io_uring mode)" << std::endl;
 
     auto workers = sgbpf::Worker::fromFile("workers.cfg");
+    std::cout << "Workers loaded: " << workers.size() << std::endl;
     sgbpf::Service service{ctx, workers, sgbpf::PacketAction::Discard};
 
     auto outstandingReqs = 32;
@@ -161,6 +162,7 @@ void unloaded_latency_benchmark(int numRequests, sgbpf::Context& ctx) {
     std::cout << "Running unloaded latency experimen (io_uring mode)" << std::endl;
 
     auto workers = sgbpf::Worker::fromFile("workers.cfg");
+    std::cout << "Workers loaded: " << workers.size() << std::endl;
     sgbpf::Service service{ctx, workers, sgbpf::PacketAction::Discard};
 
     io_uring ring;
@@ -222,6 +224,7 @@ void throughput_benchmark(int numRequests, sgbpf::Context& ctx) {
     std::cout << "Running throughput experiment" << std::endl;
 
     auto workers = sgbpf::Worker::fromFile("workers.cfg");
+    std::cout << "Workers loaded: " << workers.size() << std::endl;
     sgbpf::Service service{ctx, workers, sgbpf::PacketAction::Discard};
 
     auto totalGathers = 0;
@@ -263,6 +266,7 @@ void unloaded_latency_benchmark(int numRequests, sgbpf::Context& ctx) {
     std::cout << "Running unloaded latency experiment" << std::endl;
 
     auto workers = sgbpf::Worker::fromFile("workers.cfg");
+    std::cout << "Workers loaded: " << workers.size() << std::endl;
     sgbpf::Service service{ctx, workers, sgbpf::PacketAction::Discard};
 
     sg_msg_t buf;

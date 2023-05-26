@@ -84,7 +84,7 @@ int main(int argc, char *argv[]) {
     exit(1);
   }
   
-  printf("[WORKER %d] started------------------\n", worker_port);
+  printf("[WORKER %d] started, pinned to CPU %d ------------------\n", worker_port, cpu);
 
   struct sockaddr_in client;
   socklen_t clientSize = sizeof(struct sockaddr_in);
@@ -94,9 +94,8 @@ int main(int argc, char *argv[]) {
   while(1) {
       bytes = recvfrom(sock, buf, sizeof(sg_msg_t), 0, (struct sockaddr *) &client, &clientSize);
       if (bytes < 0) {
-          fprintf(stdout, "[WORKER %d] recvfrom() failed. Got return %d and errno = %d\n", 
+          printf("[WORKER %d] recvfrom() failed. Got return %d and errno = %d\n", 
                           worker_port, bytes, errno);
-          fflush(stdout);
           continue;
       }
       totalBytes += bytes;
@@ -104,8 +103,7 @@ int main(int argc, char *argv[]) {
       // while ((bytes = recvfrom(sock, buf, sizeof(sg_msg_t), 0, (struct sockaddr *) &client, &clientSize)) > 0) {
       sg_msg_t* msg = (sg_msg_t*) buf;
 
-      fprintf(stdout, "[WORKER %d] got req with ID %d (total bytes = %d)\n", worker_port, msg->hdr.req_id, totalBytes);
-      fflush(stdout);
+      printf("[WORKER %d] got req with ID %d (total bytes = %d)\n", worker_port, msg->hdr.req_id, totalBytes);
 
       // Vector example: send vector of increasing numbers
       sg_msg_t resp_msg;
@@ -120,13 +118,11 @@ int main(int argc, char *argv[]) {
       }
       memmove(resp_msg.body, vec, resp_msg.hdr.body_len);
       if (sendto(sock, &resp_msg, sizeof(sg_msg_t), 0, (struct sockaddr *)&client, clientSize) < 0) {
-          fprintf(stdout, "[WORKER %d] sendto() failed on req ID %d\n", worker_port, msg->hdr.req_id);
-          fflush(stdout);
+          printf("[WORKER %d] sendto() failed on req ID %d\n", worker_port, msg->hdr.req_id);
           continue;
       }
 
-      fprintf(stdout, "[WORKER %d] sent response for req with ID %d\n", worker_port, resp_msg.hdr.req_id);
-      fflush(stdout);
+      printf("[WORKER %d] sent response for req with ID %d\n", worker_port, resp_msg.hdr.req_id);
   }
 
   fprintf(stdout, "[WORKER %d] shutting down", worker_port);

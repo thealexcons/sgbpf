@@ -49,7 +49,7 @@ deinstall:
 	make --directory=$(LIBSGBPF_DIR) clean
 
 # Note: must be in this order, otherwise it fails (and must be at the end of command)
-LDFLAGS := -L$(LIBSGBPF_LIB_DIR) -L$(LIBBPF_LIB_DIR) -lsgbpf -lbpf -luring
+LDFLAGS := -L$(LIBSGBPF_LIB_DIR) -L$(LIBBPF_LIB_DIR) -lsgbpf -lbpf -lelf -luring
 INC := -I$(LIBSGBPF_HEADERS) -I$(LIBBPF_HEADERS)
 sgbpf: sgbpf.cpp
 	$(CC) $(CFLAGS) $(INC) $^ -o $@ $(LDFLAGS) -D IO_URING_CTRL_SK

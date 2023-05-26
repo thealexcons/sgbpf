@@ -30,7 +30,7 @@ deinstall:
 CC := g++
 CFLAGS := -std=c++17 -O2 -g -Wall
 # Note: must be in this order, otherwise it fails (and must be at the end of command)
-LDFLAGS := -L$(LIBSGBPF_LIB_DIR) -L$(LIBBPF_LIB_DIR) -lsgbpf -lbpf -luring
+LDFLAGS := -L$(LIBSGBPF_LIB_DIR) -L$(LIBBPF_LIB_DIR) -lsgbpf -lbpf -lelf -luring
 INC := -I$(LIBSGBPF_HEADERS) -I$(LIBBPF_HEADERS)
 $(SG_PROGRAM): main.cpp
 	$(CC) $(CFLAGS) $(INC) $^ -o $@ $(LDFLAGS)

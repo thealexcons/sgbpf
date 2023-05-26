@@ -14,7 +14,7 @@ See appendix 1 in report, but in summary:
 
     ```$ sudo apt-get update```
 
-    ```$ sudo apt install -y build-essential git make gcc clang-12 llvm-12 libelf-devgcc-multilib```
+    ```$ sudo apt install -y build-essential git make gcc clang-12 llvm-12 libelf-dev gcc-multilib```
 
 2. Download the latest copy (or the release of choice) of `libbpf`:
 
@@ -49,9 +49,9 @@ the missed shared object to `lib/x86_64-linux-gnu` or update the `LD_LIBRARY_PAT
 
   ```$ sudo apt-get update```
 
-  ```$ sudo apt install -y build-essential git make gcc clang-12 llvm-12 libelf-devgcc-multilib```
+  ```$ sudo apt install -y build-essential pkgconf git make gcc clang-12 llvm-12 libelf-dev gcc-multilib```
 
-2. Ensure you have installed `liburing` and its headers on your system:
+1. Ensure you have installed `liburing` and its headers on your system:
 
     ```$ git clone https://github.com/axboe/liburing```
 
@@ -61,7 +61,7 @@ the missed shared object to `lib/x86_64-linux-gnu` or update the `LD_LIBRARY_PAT
 
     ```$ sudo make install```
 
-3. Clone this project (**and all the submodules**) using:
+2. Clone this project (**and all the submodules**) using:
 
   ```$ git clone --recurse-submodules https://gitlab.doc.ic.ac.uk/ac3419/meng-project.git```
 
@@ -71,11 +71,11 @@ the missed shared object to `lib/x86_64-linux-gnu` or update the `LD_LIBRARY_PAT
 
     ```$ make all```
 
-    ```$ DESTDIR=root make install_headers```
+    ```$ sudo DESTDIR=root make install```
 
-    ```$ make install_uapi_headers```
+    ```$ sudo make install_headers```
 
-Note that some of these commands may require `sudo` to install headers globally.
+    ```$ sudo make install_uapi_headers```
 
 
 ## Starting a new project
@@ -103,3 +103,5 @@ Note that some of these commands may require `sudo` to install headers globally.
 7. Create a line-separated config file containing a list of worker endpoints, in the format: IPv4_Address:Port (see the example in `my-project`). 
 
 8. Run your program: `sudo ./sg_program <path/to/bpfobjs> lo`  (remember that to load BPF programs, you need admin privileges).
+
+Note: When running the loader program, if you get a message about the missing shared library `libbpf.so.1`, you can copy the missing shared object to `lib/x86_64-linux-gnu` from the build inside `libbpf/src` using: `sudo cp sgbpf/dep/libbpf/src/libbpf.so.1 /lib/x86_64-linux-gnu/`

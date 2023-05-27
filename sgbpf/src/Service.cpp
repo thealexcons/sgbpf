@@ -76,14 +76,9 @@ inline uint32_t getRequestMapIdx(uint32_t reqID) {
 
 uint32_t Service::s_nextRequestID = 0;
 
-int handle_rb_data(void *ctx, void *data, size_t data_sz)
-{
-    auto msg = (sg_msg_t*) data;
 
-	// printf("%-8s %-5s %-7d %-16s %s\n", ts, "EXEC", e->pid, e->comm, e->filename);
-    std::cout << "got data from rb at idx 5 " << ((uint32_t*) msg->body)[5] << "\n";
-	return 0;
-} 
+static int handleRingBufEpollEvent(void* ctx, void* data, size_t data_sz);
+
 
 Service::Service(Context& ctx, 
                  const std::vector<Worker>& workers,
@@ -107,7 +102,7 @@ Service::Service(Context& ctx,
 
     // Prepare epoll-based method for ringbuf
     if (d_ctrlSockMode == CtrlSockMode::Epoll) {
-        d_ctrlSkRingBuf = ring_buffer__new(d_ctx.ctrlSkRingBufMap().fd(), handle_rb_data, NULL, NULL);
+        d_ctrlSkRingBuf = ring_buffer__new(d_ctx.ctrlSkRingBufMap().fd(), handleRingBufEpollEvent, &d_notificationRingBufCallback, NULL);
     }
 
     // Configure the worker sockets
@@ -459,5 +454,22 @@ uint16_t Service::provideBuffers(bool immediate) {
     }
     return bgid;
 }
+
+
+static int handleRingBufEpollEvent(void* ctx, void* data, size_t data_sz)
+{
+    auto callback = *((std::function<void(char*, int)>*) ctx);
+    auto msg = (sg_msg_t*) data;
+
+    if (callback) {
+        callback(msg->body, msg->hdr.req_id);
+        return 0;
+    }
+
+    #ifdef DEBUG_PRINT
+    std::cerr << "WARNING: callback function not set for CtrlSockMode::Epoll" << std::endl;
+    #endif
+	return 0;
+} 
 
 } // close namespace sgbpf

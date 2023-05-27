@@ -5,7 +5,6 @@
 #include "Worker.h"
 
 #include <chrono>
-#include <iostream>
 #include <vector>
 #include <unordered_map>
 #include <liburing.h>
@@ -119,10 +118,11 @@ public:
 
     inline const std::vector<Worker>& workers() const { return *d_workers; }
 
+    // Only makes sense if CtrlSockMode::Block is set or if PacketAction::Allow is set
     inline bool isReady(bool ctrlSockOnly = false) const { 
         if (d_ctrlSockMode == CtrlSockMode::Block)
             return ctrlSockOnly ? d_ctrlSockReady : d_ctrlSockReady && d_status == Status::Ready;
-        
+
         return d_status == Status::Ready;
     }
 

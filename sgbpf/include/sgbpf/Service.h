@@ -6,6 +6,7 @@
 #include "Common.h"
 
 #include <iostream>
+#include <functional>
 #include <unordered_map>
 #include <cassert>
 #include <net/if.h>
@@ -31,7 +32,7 @@ private:
     PacketAction                        d_packetAction;
     CtrlSockMode                        d_ctrlSockMode;
     ring_buffer*                        d_ctrlSkRingBuf;
-    // std::function<void(void*)>          d_notificationRingBufCallback;
+    std::function<void(char*, int)>     d_notificationRingBufCallback;
 
     static uint32_t s_nextRequestID;
 
@@ -56,12 +57,13 @@ public:
 
     void freeRequest(Request* req, bool immediate = false);
 
-    // void setCtrlSkCallback(const std::function<void(void*)>& cb) {
-    //     assert(d_ctrlSockMode == CtrlSockMode::Epoll);
-    //     d_notificationRingBufCallback = std::move(cb);
-    // }
+    // The methods below are only relevant if CtrlSockMode::Epoll is set
+    inline void setCtrlSkCallback(const std::function<void(char*, int)>& cb) {
+        assert(d_ctrlSockMode == CtrlSockMode::Epoll);
+        d_notificationRingBufCallback = std::move(cb);
+    }
 
-    int epollWaitCtrlSock(int timeout_ms) {
+    inline int epollWaitCtrlSock(int timeout_ms) {
         assert(d_ctrlSockMode == CtrlSockMode::Epoll);
         return ring_buffer__poll(d_ctrlSkRingBuf, timeout_ms);
     }

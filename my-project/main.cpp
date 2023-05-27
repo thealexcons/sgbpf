@@ -285,12 +285,28 @@ void unloaded_latency_benchmark(int numRequests, sgbpf::Context& ctx) {
 
 #endif
 
+int libbpf_print_fn(enum libbpf_print_level level, const char *format, va_list args)
+{
+	/* Ignore debug-level libbpf logs */
+	if (level > LIBBPF_WARN)
+		return 0;
+	return vfprintf(stderr, format, args);
+}
+
 int main(int argc, char** argv) {
 
     if (argc < 3) {
         std::cerr << "Usage: " << argv[0] << " <path/to/bpfobjs> <ifname>" << std::endl;
         return 1;
     }
+
+    // start with ctrl sk io_uring support
+    // test and benchmark compared with read()
+
+    // IS EPOLL ON CTRL SK WORTH IT?? maybe if we get multiple notifs then yes...
+    // then move onto epoll via ringbuf
+    // test and benchmark compared with read()
+
 
     // sudo ./sg_program bpfobjs lo
     // export OUTPUT_BPF_OBJ_DIR=$(pwd)/bpfobjs
@@ -301,27 +317,45 @@ int main(int argc, char** argv) {
     sgbpf::Context ctx{argv[1], argv[2]};
 
     auto workers = sgbpf::Worker::fromFile("workers.cfg");
-    sgbpf::Service service{ctx, workers, sgbpf::PacketAction::Discard};
-    
+    sgbpf::Service service{
+        ctx, 
+        workers, 
+        sgbpf::PacketAction::Discard,   // We only care about the aggregated data
+        sgbpf::CtrlSockMode::Default    // Causes scatter() to block on the ctrl sk
+    };
+
     // int flags = fcntl(sg.ctrlSkFd(), F_GETFL, 0);
     // fcntl(service.ctrlSkFd(), F_SETFL, flags | O_NONBLOCK);
 
     // EXAMPLE 1: Vector-based data (with in-kernel aggregation)
     sgbpf::ReqParams params; // set params here....
     params.completionPolicy = sgbpf::GatherCompletionPolicy::WaitAll;
-    params.numWorkersToWait = 20;
-    params.timeout = std::chrono::microseconds{100*1000}; // 10 ms
+    params.numWorkersToWait = workers.size();
+    params.timeout = std::chrono::microseconds{50000 * 100};
 
-    auto req = service.scatter("SCATTER", 8);
-    sg_msg_t buf;
-    auto b = read(service.ctrlSkFd(), &buf, sizeof(sg_msg_t));
-    assert(b == sizeof(sg_msg_t));
+    auto req = service.scatter("SCATTER", 8, params);
+
+    // sg_msg_t buf;
+    // auto b = read(service.ctrlSkFd(), &buf, sizeof(sg_msg_t));
+    // assert(b == sizeof(sg_msg_t));
 
     service.processEvents(req->id());
+    assert(req->isReady());
+    auto buf = req->ctrlSockData();
     
-    for (auto j = 0u; j < buf.hdr.body_len; j++) {
-        std::cout << "vec[" << j << "] = " << ((uint32_t*) buf.body)[j] << std::endl;
+    for (auto j = 0u; j < RESP_MAX_VECTOR_SIZE; j++) {
+        std::cout << "vec[" << j << "] = " << ((uint32_t*) buf->body)[j] << std::endl;
+        assert(((uint32_t*) buf->body)[j] == workers.size() * j);
     }
+
+    // std::cout << "\n\n";
+    // for (auto [wfd, ptrs] : req->bufferPointers()) {
+    //     std::cout << "Worker " << wfd  << std::endl;
+    //     for (auto ptr : ptrs) {
+    //         auto r = (sg_msg_t*) req->data(ptr);
+    //         std::cout << "  " << ((uint32_t*)r->body)[10] << std::endl;
+    //     }
+    // }
 
     // WAIT ALL WORKS PERFECTLY FINE
     // MUST BE RELATED TO THE DROPPED PACKETS IN WAIT_N ??

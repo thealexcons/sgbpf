@@ -16,11 +16,7 @@ namespace sgbpf
 {
 
 
-enum class PacketAction 
-{
-    Discard,
-    Allow,
-};
+
 
 class Service 
 {
@@ -36,7 +32,8 @@ private:
     std::vector<char*>                  d_packetBufferPool;
     Request*                            d_activeRequests;
     PacketAction                        d_packetAction;
-    
+    CtrlSockMode                        d_ctrlSockMode;
+
     static uint32_t s_nextRequestID;
 
     constexpr static const uint16_t PORT = 9225;    // just generate and add to map
@@ -47,7 +44,8 @@ public:
 
     Service(Context& ctx,
             const std::vector<Worker>& workers,
-            PacketAction packetAction);
+            PacketAction packetAction,
+            CtrlSockMode ctrlSockMode = CtrlSockMode::Default);
 
     ~Service();
 

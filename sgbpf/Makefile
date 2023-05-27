@@ -5,7 +5,7 @@ LIBBPF_LIB_DIR := ./dep/libbpf/src/
 
 ########### USER LIB ###########
 CC_ULIB := g++
-CFLAGS_ULIB= -std=c++17 -O2 -g -Wall -I$(INC_DIR) -I$(LIBBPF_INC) -L$(LIBBPF_LIB_DIR) -lbpf -luring
+CFLAGS_ULIB= -std=c++17 -O2 -g -Wall -I$(INC_DIR) -I$(LIBBPF_INC) -L$(LIBBPF_LIB_DIR) -lbpf -luring -D DEBUG_PRINT
 
 OUT_FILE_ULIB := libsgbpf.a
 OBJ_DIR_ULIB := ./obj

@@ -11,7 +11,7 @@ enum {
     IO_WRITE,
 };
 
-typedef struct conn_info {
+typedef struct __attribute__((packed)) conn_info  {
     int      fd;
     uint16_t type;
     uint16_t bgid;
@@ -20,7 +20,7 @@ typedef struct conn_info {
 // Add a socket read operation to the IO ring
 inline void addSocketRead(io_uring *ring, int fd, uint16_t bgid, size_t message_size, unsigned flags) {
     io_uring_sqe *sqe = io_uring_get_sqe(ring);
-    io_uring_prep_recv(sqe, fd, NULL, message_size, MSG_WAITALL); // wait for all fragments to arrive
+    io_uring_prep_recv(sqe, fd, NULL, message_size, 0);
     io_uring_sqe_set_flags(sqe, flags);
     sqe->buf_group = bgid;
 
@@ -79,12 +79,14 @@ uint32_t Service::s_nextRequestID = 0;
 
 Service::Service(Context& ctx, 
                  const std::vector<Worker>& workers,
-                 PacketAction packetAction) 
+                 PacketAction packetAction,
+                 CtrlSockMode ctrlSockMode) 
     : d_ctx{ctx}
     , d_workers{workers}
     , d_ioCtx{d_workers.size() * 4}
     , d_numSkReads{0}
     , d_packetAction{packetAction}
+    , d_ctrlSockMode{ctrlSockMode}
 {
     if (d_workers.size() > MAX_SOCKETS_ALLOWED)
         throw std::invalid_argument{"Exceeded max number of workers allowed"};
@@ -186,14 +188,7 @@ Request* Service::scatter(const char* msg, size_t len, ReqParams params)
 
     int reqId = s_nextRequestID++;
     auto idx = getRequestMapIdx(reqId);
-    Request* req = new (d_activeRequests + idx) Request{reqId, params, &d_packetBufferPool, &d_workers, allowPks};
-
-    // d_activeRequests.emplace(std::piecewise_construct,
-    //         std::forward_as_tuple(reqId),
-    //         std::forward_as_tuple(reqId, params, &d_packetBufferPool, &d_workers, allowPks)
-    // );
-    // Request* req = &d_activeRequests[reqId];
- 
+    Request* req = new (d_activeRequests + idx) Request{reqId, params, &d_packetBufferPool, &d_workers, d_packetAction, d_ctrlSockMode};
 
     // Register response packet buffers for this SG request
     // Every ScatterGatherRequest instance allocates a set of buffers to store the
@@ -242,10 +237,25 @@ Request* Service::scatter(const char* msg, size_t len, ReqParams params)
             }
         }
     }
-    
+
+    if (d_ctrlSockMode == CtrlSockMode::Default) {
+        io_uring_sqe *sqe = io_uring_get_sqe(&d_ioCtx.ring);
+        io_uring_prep_recv(sqe, d_ctrlSkFd, &req->d_ctrlSkBuf, Request::MaxBufferSize, 0);
+        io_uring_sqe_set_flags(sqe, 0);
+
+        conn_info_t conn_i;
+        conn_i.fd = d_ctrlSkFd;
+        memset(((int*)&conn_i) + 1, reqId, sizeof(uint32_t)); // hack to fit in the reqID
+        memcpy(&sqe->user_data, &conn_i, sizeof(conn_info_t));
+
+        auto waitFor = 2 + allowPks * d_workers.size() * params.numPksPerRespMsg;
+        req->startTimer();
+        std::cout << "submitting " << io_uring_submit_and_wait(&d_ioCtx.ring, waitFor) << std::endl;
+        return req;
+    }
+
     io_uring_submit(&d_ioCtx.ring);
     req->startTimer();
-
     return req;
 }
 
@@ -264,23 +274,38 @@ void Service::processPendingEvents(int requestID) {
     unsigned head;
     bool submitPendingReads = false;
 
-    io_uring_for_each_cqe(&d_ioCtx.ring, head, cqe) {
+    io_uring_for_each_cqe(&d_ioCtx.ring, head, cqe) {   
         ++count;
-        if (d_packetAction == PacketAction::Discard)
-            continue;
+        if (cqe->res == -ENOBUFS) {
+            // should not happen
+            throw std::runtime_error{"FATAL: no buffers available to read packet data."};
+        }
 
         const auto conn_i = reinterpret_cast<conn_info_t*>(&cqe->user_data);
 
-        if (cqe->res == -ENOBUFS) {
-            // should not happen
-            throw std::runtime_error{"No buffers available to read packet data."};
+        // If this is a cqe for the ctrl sk, just continue
+        if (d_ctrlSockMode == CtrlSockMode::Default && conn_i->fd == d_ctrlSkFd) {
+            const auto reqID = reinterpret_cast<uint32_t*>(((void*)conn_i) + sizeof(uint32_t));
+            #ifdef DEBUG_PRINT
+            std::cout << "got control socket for reqID " << *reqID << std::endl; 
+            #endif
+
+            auto& req = d_activeRequests[getRequestMapIdx(*reqID)];
+            if (!req.isActive()) {
+                continue;
+            }
+            req.d_ctrlSockReady = true;
+            if (d_packetAction == PacketAction::Discard) {
+                req.d_status = Request::Status::Ready;
+            }
+            continue;
         }
         
         if (conn_i->type == IO_READ && cqe->res > 0) {
             auto bgid = conn_i->bgid;                               // the buffer group ID
             auto bid = cqe->flags >> IORING_CQE_BUFFER_SHIFT;       // the packet's buffer index within the group
             const auto resp = (sg_msg_t*) (d_packetBufferPool[bgid] + bid * Request::MaxBufferSize);
-            auto req = d_activeRequests[getRequestMapIdx(resp->hdr.req_id)];
+            auto& req = d_activeRequests[getRequestMapIdx(resp->hdr.req_id)];
             if (!req.isActive()) {
                 continue;
             }

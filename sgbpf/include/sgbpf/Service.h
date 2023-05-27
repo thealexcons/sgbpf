@@ -40,6 +40,8 @@ private:
     constexpr static const int DEFAULT_REQUEST_ID = -1;
     constexpr static const int NUM_BUFFERS = std::numeric_limits<uint16_t>::max();
 
+    friend int handleRingBufEpollEvent(void* ctx, void* data, size_t data_sz);
+
 public:
 
     Service(Context& ctx,

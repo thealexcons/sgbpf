@@ -68,8 +68,12 @@ int main(int argc, char** argv) {
     // auto b = read(service.ctrlSkFd(), &buf, sizeof(sg_msg_t));
     // assert(b == sizeof(sg_msg_t));
 
-    service.epollWaitCtrlSock(100);
-    service.processEvents(req->id());
+    while (1) {
+        int completions = service.epollWaitCtrlSock(50);
+        if (completions > 0)
+            break;
+    }
+    service.processEvents();
     // std::cout << req->isReady() << std::endl;
     // assert(req->isReady());
 

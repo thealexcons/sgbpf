@@ -77,7 +77,7 @@ inline uint32_t getRequestMapIdx(uint32_t reqID) {
 uint32_t Service::s_nextRequestID = 0;
 
 
-static int handleRingBufEpollEvent(void* ctx, void* data, size_t data_sz);
+int handleRingBufEpollEvent(void* ctx, void* data, size_t data_sz);
 
 
 Service::Service(Context& ctx, 
@@ -102,7 +102,8 @@ Service::Service(Context& ctx,
 
     // Prepare epoll-based method for ringbuf
     if (d_ctrlSockMode == CtrlSockMode::Epoll) {
-        d_ctrlSkRingBuf = ring_buffer__new(d_ctx.ctrlSkRingBufMap().fd(), handleRingBufEpollEvent, &d_notificationRingBufCallback, NULL);
+        // d_ctrlSkRingBuf = ring_buffer__new(d_ctx.ctrlSkRingBufMap().fd(), handleRingBufEpollEvent, &d_notificationRingBufCallback, NULL);
+        d_ctrlSkRingBuf = ring_buffer__new(d_ctx.ctrlSkRingBufMap().fd(), handleRingBufEpollEvent, this, NULL);
     }
 
     // Configure the worker sockets
@@ -456,13 +457,13 @@ uint16_t Service::provideBuffers(bool immediate) {
 }
 
 
-static int handleRingBufEpollEvent(void* ctx, void* data, size_t data_sz)
+int handleRingBufEpollEvent(void* ctx, void* data, size_t data_sz)
 {
-    auto callback = *((std::function<void(char*, int)>*) ctx);
+    auto service = (Service*) ctx;
     auto msg = (sg_msg_t*) data;
 
-    if (callback) {
-        callback(msg->body, msg->hdr.req_id);
+    if (service->d_notificationRingBufCallback) {
+        service->d_notificationRingBufCallback(msg->body, msg->hdr.req_id);
         return 0;
     }
 

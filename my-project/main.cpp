@@ -321,7 +321,7 @@ int main(int argc, char** argv) {
         ctx, 
         workers, 
         sgbpf::PacketAction::Discard,   // We only care about the aggregated data
-        sgbpf::CtrlSockMode::Native    // Causes scatter() to block on the ctrl sk
+        sgbpf::CtrlSockMode::Block    // Causes scatter() to block on the ctrl sk
     };
 
     // int flags = fcntl(sg.ctrlSkFd(), F_GETFL, 0);

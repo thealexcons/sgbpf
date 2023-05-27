@@ -42,7 +42,7 @@ public:
     Service(Context& ctx,
             const std::vector<Worker>& workers,
             PacketAction packetAction,
-            CtrlSockMode ctrlSockMode = CtrlSockMode::UnixFD);
+            CtrlSockMode ctrlSockMode = CtrlSockMode::Unix);
 
     ~Service();
 

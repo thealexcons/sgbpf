@@ -46,8 +46,8 @@ enum class PacketAction
 
 enum class CtrlSockMode
 {
-    UnixFD,         // use as a raw Unix file descriptor
-    Native,        // use io_uring + buffer, blocks until ctrl sk is ready
+    Unix,           // use as a raw Unix file descriptor
+    Block,          // use io_uring + buffer, blocks until ctrl sk is ready
     Notification    // use epoll notification-based polling
 };
 
@@ -82,7 +82,7 @@ private:
     std::chrono::microseconds  d_timeOut;
     GatherCompletionPolicy     d_completionPolicy;
     unsigned int               d_numWorkersToWait;
-    // Fields only relevant if CtrlSockMode::Native is set
+    // Fields only relevant if CtrlSockMode::Block is set
     CtrlSockMode               d_ctrlSockMode;
     bool                       d_ctrlSockReady;
     sg_msg_t                   d_ctrlSkBuf;
@@ -119,7 +119,7 @@ public:
     inline const std::vector<Worker>& workers() const { return *d_workers; }
 
     inline bool isReady(bool ctrlSockOnly = false) const { 
-        if (d_ctrlSockMode == CtrlSockMode::Native)
+        if (d_ctrlSockMode == CtrlSockMode::Block)
             return ctrlSockOnly ? d_ctrlSockReady : d_ctrlSockReady && d_status == Status::Ready;
         
         return d_status == Status::Ready;
@@ -135,7 +135,7 @@ public:
         return ((*d_packetBufferPool)[packetPtr.bgid] + packetPtr.bid * Request::MaxBufferSize);
     }
 
-    // Methods below are only relevant if CtrlSockMode::Native is set
+    // Methods below are only relevant if CtrlSockMode::Block is set
 
     inline const sg_msg_t* ctrlSockData() const { return &d_ctrlSkBuf; }
 

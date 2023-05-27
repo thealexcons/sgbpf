@@ -238,7 +238,7 @@ Request* Service::scatter(const char* msg, size_t len, ReqParams params)
         }
     }
 
-    if (d_ctrlSockMode == CtrlSockMode::Native) {
+    if (d_ctrlSockMode == CtrlSockMode::Block) {
         io_uring_sqe *sqe = io_uring_get_sqe(&d_ioCtx.ring);
         io_uring_prep_recv(sqe, d_ctrlSkFd, &req->d_ctrlSkBuf, Request::MaxBufferSize, 0);
         io_uring_sqe_set_flags(sqe, 0);
@@ -286,7 +286,7 @@ void Service::processPendingEvents(int requestID) {
         const auto conn_i = reinterpret_cast<conn_info_t*>(&cqe->user_data);
 
         // If this is a cqe for the ctrl sk, just continue
-        if (d_ctrlSockMode == CtrlSockMode::Native && conn_i->fd == d_ctrlSkFd) {
+        if (d_ctrlSockMode == CtrlSockMode::Block && conn_i->fd == d_ctrlSkFd) {
             const auto reqID = reinterpret_cast<uint32_t*>(((char*)conn_i) + sizeof(uint32_t));
             #ifdef DEBUG_PRINT
             std::cout << "got control socket cqe for reqID " << *reqID << std::endl; 

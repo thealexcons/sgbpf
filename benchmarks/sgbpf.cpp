@@ -83,7 +83,7 @@ void throughput_benchmark(int numRequests, sgbpf::Context& ctx) {
         ctx, 
         workers, 
         sgbpf::PacketAction::Discard,
-        sgbpf::CtrlSockMode::Native
+        sgbpf::CtrlSockMode::Block
     };
     auto outstandingReqs = 32;
     auto totalGathers = 0;
@@ -135,7 +135,7 @@ void unloaded_latency_benchmark(int numRequests, sgbpf::Context& ctx) {
         ctx, 
         workers, 
         sgbpf::PacketAction::Discard,
-        sgbpf::CtrlSockMode::Native
+        sgbpf::CtrlSockMode::Block
     };
     
     std::vector<uint64_t> times;

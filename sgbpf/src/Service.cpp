@@ -76,6 +76,14 @@ inline uint32_t getRequestMapIdx(uint32_t reqID) {
 
 uint32_t Service::s_nextRequestID = 0;
 
+int handle_rb_data(void *ctx, void *data, size_t data_sz)
+{
+    auto msg = (sg_msg_t*) data;
+
+	// printf("%-8s %-5s %-7d %-16s %s\n", ts, "EXEC", e->pid, e->comm, e->filename);
+    std::cout << "got data from rb at idx 5 " << ((uint32_t*) msg->body)[5] << "\n";
+	return 0;
+} 
 
 Service::Service(Context& ctx, 
                  const std::vector<Worker>& workers,
@@ -96,6 +104,11 @@ Service::Service(Context& ctx,
 
     // Provide an initial buffer for packets
     provideBuffers(true);
+
+    // Prepare epoll-based method for ringbuf
+    if (d_ctrlSockMode == CtrlSockMode::Epoll) {
+        d_ctrlSkRingBuf = ring_buffer__new(d_ctx.ctrlSkRingBufMap().fd(), handle_rb_data, NULL, NULL);
+    }
 
     // Configure the worker sockets
     int workerFds[MAX_SOCKETS_ALLOWED];
@@ -130,7 +143,7 @@ Service::Service(Context& ctx,
     if ( bind(d_ctrlSkFd, (const struct sockaddr *) &ctrlSkAddr, sizeof(sockaddr_in)) < 0 )
         throw std::runtime_error{"Failed bind() on gather-control socket"};
 
-    d_ctx.setGatherControlPort(ctrlPort);
+    d_ctx.setGatherControlPort(ctrlPort, d_ctrlSockMode == CtrlSockMode::Epoll);
 
 
     // Configure the scatter socket for sending
@@ -151,6 +164,10 @@ Service::Service(Context& ctx,
 Service::~Service()
 {
     delete[] d_activeRequests;
+
+    if (d_ctrlSockMode == CtrlSockMode::Epoll) {
+        ring_buffer__free(d_ctrlSkRingBuf);
+    }
 
     // Free all the allocated memory used for storing packets 
     for (auto i = 0u; i < d_packetBufferPool.size(); ++i) {
@@ -292,13 +309,13 @@ void Service::processPendingEvents(int requestID) {
             std::cout << "got control socket cqe for reqID " << *reqID << std::endl; 
             #endif
 
-            auto& req = d_activeRequests[getRequestMapIdx(*reqID)];
-            if (!req.isActive()) {
+            auto req = &d_activeRequests[getRequestMapIdx(*reqID)];
+            if (!req->isActive()) {
                 continue;
             }
-            req.d_ctrlSockReady = true;
+            req->d_ctrlSockReady = true;
             if (d_packetAction == PacketAction::Discard) {
-                req.d_status = Request::Status::Ready;
+                req->d_status = Request::Status::Ready;
             }
             continue;
         }
@@ -307,57 +324,57 @@ void Service::processPendingEvents(int requestID) {
             auto bgid = conn_i->bgid;                               // the buffer group ID
             auto bid = cqe->flags >> IORING_CQE_BUFFER_SHIFT;       // the packet's buffer index within the group
             const auto resp = (sg_msg_t*) (d_packetBufferPool[bgid] + bid * Request::MaxBufferSize);
-            auto& req = d_activeRequests[getRequestMapIdx(resp->hdr.req_id)];
-            if (!req.isActive()) {
+            auto req = &d_activeRequests[getRequestMapIdx(resp->hdr.req_id)];
+            if (!req->isActive()) {
                 continue;
             }
 
             // If we are only processing packets for a given request
-            if (processOnlyGivenReq && (req.id() != requestID || resp->hdr.req_id != static_cast<uint32_t>(req.id()))) {
+            if (processOnlyGivenReq && (req->id() != requestID || resp->hdr.req_id != static_cast<uint32_t>(req->id()))) {
                 #ifdef DEBUG_PRINT
-                std::cout << "[DEBUG] Ignoring packet with ID " << req.id() << ", only processing pks from req " << requestID << '\n';                    
-                std::cout << "\t hdr.req_id = " << resp->hdr.req_id << " req.id() = " << req.id() << " requestID = " << requestID << std::endl;
+                std::cout << "[DEBUG] Ignoring packet with ID " << req->id() << ", only processing pks from req " << requestID << '\n';                    
+                std::cout << "\t hdr.req_id = " << resp->hdr.req_id << " req->id() = " << req->id() << " requestID = " << requestID << std::endl;
                 #endif
                 continue;
             }
 
             // Drop any unnecessary packets (for messages beyond N in waitN or 1 in waitAny)
             // this is currently the implementation
-            if (req.d_status == Request::Status::Ready) {
+            if (req->d_status == Request::Status::Ready) {
                 #ifdef DEBUG_PRINT
-                // std::cout << "[DEBUG] Dropping packet (request completed already)" << std::endl;
+                std::cout << "[DEBUG] Dropping packet (request completed already)" << std::endl;
                 #endif
                 continue;
             }
 
-            if (req.d_status == Request::Status::TimedOut || req.hasTimedOut()) {
+            if (req->d_status == Request::Status::TimedOut || req->hasTimedOut()) {
                 #ifdef DEBUG_PRINT
-                std::cout << "[DEBUG] Request " << req.id() << " has timed out" << std::endl;                    
+                std::cout << "[DEBUG] Request " << req->id() << " has timed out" << std::endl;                    
                 #endif
-                req.d_status = Request::Status::TimedOut;
+                req->d_status = Request::Status::TimedOut;
                 continue;
             }
             
             #ifdef DEBUG_PRINT
-            // std::cout << "Got pk on fd " << conn_i->fd << " for req " << req.id() << std::endl;
+            std::cout << "Got pk on fd " << conn_i->fd << " for req " << req->id() << std::endl;
             #endif
 
-            req.addBufferPtr(conn_i->fd, bgid, bid);
-            if (req.receivedSufficientPackets()) {
+            req->addBufferPtr(conn_i->fd, bgid, bid);
+            if (req->receivedSufficientPackets()) {
                 #ifdef DEBUG_PRINT
-                std::cout << "[DEBUG] Request " << req.id() << " is ready" << std::endl;
+                std::cout << "[DEBUG] Request " << req->id() << " is ready" << std::endl;
                 #endif
-                req.d_status = Request::Status::Ready;
+                req->d_status = Request::Status::Ready;
                 continue;
             }
 
             // check for multi-packet message and add more reads if necessary
-            if (req.d_expectedPacketsPerMessage != resp->hdr.num_pks && resp->hdr.num_pks > 1) {
-                req.d_expectedPacketsPerMessage = resp->hdr.num_pks;
+            if (req->d_expectedPacketsPerMessage != resp->hdr.num_pks && resp->hdr.num_pks > 1) {
+                req->d_expectedPacketsPerMessage = resp->hdr.num_pks;
 
                 int remaining = 0;
-                for (const auto& [wfd, ptrs] : req.d_workerBufferPtrs) {
-                    auto pksRemainingForThisWorker = abs(req.d_expectedPacketsPerMessage - ptrs.size());
+                for (const auto& [wfd, ptrs] : req->d_workerBufferPtrs) {
+                    auto pksRemainingForThisWorker = abs(req->d_expectedPacketsPerMessage - ptrs.size());
                     if (pksRemainingForThisWorker > 0) {
                         remaining += pksRemainingForThisWorker;
 
@@ -377,7 +394,7 @@ void Service::processPendingEvents(int requestID) {
                 submitPendingReads = (remaining > 0);
                 // if (submitPendingReads) {
                 //     std::cout << "remaining: " << remaining << std::endl;
-                //     std::cout << "req " << req.id() << " has num_pks = " << resp->hdr.num_pks << std::endl;
+                //     std::cout << "req " << req->id() << " has num_pks = " << resp->hdr.num_pks << std::endl;
                 // }          
             }
         }

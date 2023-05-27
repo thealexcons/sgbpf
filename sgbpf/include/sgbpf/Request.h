@@ -5,6 +5,7 @@
 #include "Worker.h"
 
 #include <chrono>
+#include <iostream>
 #include <vector>
 #include <unordered_map>
 #include <liburing.h>
@@ -46,9 +47,9 @@ enum class PacketAction
 
 enum class CtrlSockMode
 {
-    Unix,           // use as a raw Unix file descriptor
+    DefaultUnix,    // use as a raw Unix file descriptor
     Block,          // use io_uring + buffer, blocks until ctrl sk is ready
-    Notification    // use epoll notification-based polling
+    Epoll           // use epoll notification-based polling with callback
 };
 
 

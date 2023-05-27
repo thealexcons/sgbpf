@@ -29,10 +29,15 @@ struct {
 
 
 // Stores the application control port (for gathering)
+struct ctrl_sk_info {
+    __u16 port;
+    __u16 useRingBuf;
+};
+
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __type(key, __u32);
-    __type(value, __u16);
+    __type(value, struct ctrl_sk_info);
     __uint(max_entries, 1);
 } map_gather_ctrl_port SEC(".maps");
 
@@ -98,7 +103,7 @@ struct {
 
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
-    __uint(max_entries, 256 * 1024 /* 256 KB */);
-} map_ringbuf SEC(".maps");
+    __uint(max_entries, sizeof(sg_msg_t) * MAX_ACTIVE_REQUESTS_ALLOWED);
+} map_ctrl_sk_ringbuf SEC(".maps");
 
 #endif // MAPS_BPF_H

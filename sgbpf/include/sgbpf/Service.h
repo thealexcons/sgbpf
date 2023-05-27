@@ -30,6 +30,8 @@ private:
     Request*                            d_activeRequests;
     PacketAction                        d_packetAction;
     CtrlSockMode                        d_ctrlSockMode;
+    ring_buffer*                        d_ctrlSkRingBuf;
+    // std::function<void(void*)>          d_notificationRingBufCallback;
 
     static uint32_t s_nextRequestID;
 
@@ -42,7 +44,7 @@ public:
     Service(Context& ctx,
             const std::vector<Worker>& workers,
             PacketAction packetAction,
-            CtrlSockMode ctrlSockMode = CtrlSockMode::Unix);
+            CtrlSockMode ctrlSockMode = CtrlSockMode::DefaultUnix);
 
     ~Service();
 
@@ -53,6 +55,16 @@ public:
     void processEvents(int requestID = DEFAULT_REQUEST_ID);
 
     void freeRequest(Request* req, bool immediate = false);
+
+    // void setCtrlSkCallback(const std::function<void(void*)>& cb) {
+    //     assert(d_ctrlSockMode == CtrlSockMode::Epoll);
+    //     d_notificationRingBufCallback = std::move(cb);
+    // }
+
+    int epollWaitCtrlSock(int timeout_ms) {
+        assert(d_ctrlSockMode == CtrlSockMode::Epoll);
+        return ring_buffer__poll(d_ctrlSkRingBuf, timeout_ms);
+    }
 
 private:
 

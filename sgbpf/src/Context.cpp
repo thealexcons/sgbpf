@@ -16,6 +16,7 @@ Context::Context(const char* bpfObjectsPath, const char* interfaceName)
     , d_workersHashMap{d_object.findMapByName(WORKERS_HASH_MAP_NAME).value()}
     , d_appPortMap{d_object.findMapByName(APP_PORT_MAP_NAME).value()}
     , d_gatherCtrlPortMap{d_object.findMapByName(GATHER_CTRL_PORT_MAP_NAME).value()}
+    , d_ctrlSkRingBufMap{d_object.findMapByName(CTRL_SOCK_RINGBUF_MAP).value()}
 {
     if (!d_ifindex)
         throw std::invalid_argument{"Cannot resolve interface index"};
@@ -62,11 +63,17 @@ void Context::setScatterPort(uint16_t port)
     d_appPortMap.update(&ZERO, &portNetBytes);
 }
 
-void Context::setGatherControlPort(uint16_t port)
+void Context::setGatherControlPort(uint16_t port, bool useRingBufNotifs)
 {
     // Register the control socket port for the gather stage
-    const auto portNetBytes = htons(port);
-    d_gatherCtrlPortMap.update(&ZERO, &portNetBytes);
+    struct ctrl_sk_info {
+        __u16 port;
+        __u16 useRingBuf;
+    } data = {
+        .port = htons(port),
+        .useRingBuf = (uint16_t)useRingBufNotifs,
+    };
+    d_gatherCtrlPortMap.update(&ZERO, &data);
 }
 
 

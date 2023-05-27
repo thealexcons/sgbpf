@@ -83,7 +83,7 @@ Service::Service(Context& ctx,
                  CtrlSockMode ctrlSockMode) 
     : d_ctx{ctx}
     , d_workers{workers}
-    , d_ioCtx{d_workers.size() * 4}
+    , d_ioCtx{(uint32_t) d_workers.size() * 4}
     , d_numSkReads{0}
     , d_packetAction{packetAction}
     , d_ctrlSockMode{ctrlSockMode}
@@ -238,19 +238,21 @@ Request* Service::scatter(const char* msg, size_t len, ReqParams params)
         }
     }
 
-    if (d_ctrlSockMode == CtrlSockMode::Default) {
+    if (d_ctrlSockMode == CtrlSockMode::Native) {
         io_uring_sqe *sqe = io_uring_get_sqe(&d_ioCtx.ring);
         io_uring_prep_recv(sqe, d_ctrlSkFd, &req->d_ctrlSkBuf, Request::MaxBufferSize, 0);
         io_uring_sqe_set_flags(sqe, 0);
 
         conn_info_t conn_i;
         conn_i.fd = d_ctrlSkFd;
-        memset(((int*)&conn_i) + 1, reqId, sizeof(uint32_t)); // hack to fit in the reqID
+        // For ctrl sk events, use the final 32 bits to represent the request ID
+        auto reqIdField = (uint32_t*) (((char*)&conn_i) + sizeof(uint32_t));
+        *reqIdField = reqId; 
         memcpy(&sqe->user_data, &conn_i, sizeof(conn_info_t));
 
         auto waitFor = 2 + allowPks * d_workers.size() * params.numPksPerRespMsg;
         req->startTimer();
-        std::cout << "submitting " << io_uring_submit_and_wait(&d_ioCtx.ring, waitFor) << std::endl;
+        io_uring_submit_and_wait(&d_ioCtx.ring, waitFor);
         return req;
     }
 
@@ -284,10 +286,10 @@ void Service::processPendingEvents(int requestID) {
         const auto conn_i = reinterpret_cast<conn_info_t*>(&cqe->user_data);
 
         // If this is a cqe for the ctrl sk, just continue
-        if (d_ctrlSockMode == CtrlSockMode::Default && conn_i->fd == d_ctrlSkFd) {
-            const auto reqID = reinterpret_cast<uint32_t*>(((void*)conn_i) + sizeof(uint32_t));
+        if (d_ctrlSockMode == CtrlSockMode::Native && conn_i->fd == d_ctrlSkFd) {
+            const auto reqID = reinterpret_cast<uint32_t*>(((char*)conn_i) + sizeof(uint32_t));
             #ifdef DEBUG_PRINT
-            std::cout << "got control socket for reqID " << *reqID << std::endl; 
+            std::cout << "got control socket cqe for reqID " << *reqID << std::endl; 
             #endif
 
             auto& req = d_activeRequests[getRequestMapIdx(*reqID)];

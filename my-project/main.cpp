@@ -321,7 +321,7 @@ int main(int argc, char** argv) {
         ctx, 
         workers, 
         sgbpf::PacketAction::Discard,   // We only care about the aggregated data
-        sgbpf::CtrlSockMode::Default    // Causes scatter() to block on the ctrl sk
+        sgbpf::CtrlSockMode::Native    // Causes scatter() to block on the ctrl sk
     };
 
     // int flags = fcntl(sg.ctrlSkFd(), F_GETFL, 0);
@@ -333,11 +333,11 @@ int main(int argc, char** argv) {
     params.numWorkersToWait = workers.size();
     params.timeout = std::chrono::microseconds{50000 * 100};
 
-    auto req = service.scatter("SCATTER", 8, params);
-
     // sg_msg_t buf;
     // auto b = read(service.ctrlSkFd(), &buf, sizeof(sg_msg_t));
     // assert(b == sizeof(sg_msg_t));
+
+    auto req = service.scatter("SCATTER", 8, params);
 
     service.processEvents(req->id());
     assert(req->isReady());
@@ -347,7 +347,7 @@ int main(int argc, char** argv) {
         std::cout << "vec[" << j << "] = " << ((uint32_t*) buf->body)[j] << std::endl;
         assert(((uint32_t*) buf->body)[j] == workers.size() * j);
     }
-
+    
     // std::cout << "\n\n";
     // for (auto [wfd, ptrs] : req->bufferPointers()) {
     //     std::cout << "Worker " << wfd  << std::endl;

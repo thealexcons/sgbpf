@@ -15,9 +15,6 @@
 namespace sgbpf 
 {
 
-
-
-
 class Service 
 {
 private:
@@ -45,7 +42,7 @@ public:
     Service(Context& ctx,
             const std::vector<Worker>& workers,
             PacketAction packetAction,
-            CtrlSockMode ctrlSockMode = CtrlSockMode::Default);
+            CtrlSockMode ctrlSockMode = CtrlSockMode::UnixFD);
 
     ~Service();
 

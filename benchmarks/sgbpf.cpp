@@ -2,6 +2,7 @@
 #include <cstring>
 #include <algorithm>
 #include <chrono>
+#include <deque>
 #include <thread>
 #include <cmath>
 
@@ -78,72 +79,39 @@ void throughput_benchmark(int numRequests, sgbpf::Context& ctx) {
 
     auto workers = sgbpf::Worker::fromFile("workers.cfg");
     std::cout << "Workers loaded: " << workers.size() << std::endl;
-    sgbpf::Service service{ctx, workers, sgbpf::PacketAction::Discard};
-
+    sgbpf::Service service{
+        ctx, 
+        workers, 
+        sgbpf::PacketAction::Discard,
+        sgbpf::CtrlSockMode::Native
+    };
     auto outstandingReqs = 32;
-
-    io_uring ring;
-    io_uring_params ringParams;
-    memset(&ringParams, 0, sizeof(ringParams));
-
-    if (io_uring_queue_init_params(1024, &ring, &ringParams) < 0)
-        throw std::runtime_error{"Failed to initialise io_uring queue"};
-
-    // Preallocate and register buffers to receive the packets in
-    char* buffer = new char[(numRequests + outstandingReqs) * sizeof(sg_msg_t)];
-
-    io_uring_sqe* sqe = io_uring_get_sqe(&ring);
-    io_uring_prep_provide_buffers(sqe, buffer, sizeof(sg_msg_t), numRequests + outstandingReqs, 0, 0);
-    io_uring_submit(&ring);
-    io_uring_cqe* cqe;
-    io_uring_wait_cqe(&ring, &cqe);
-    if (cqe->res < 0)
-        throw std::runtime_error{"Failed to provide io_uring buffers to the kernel"};
-    io_uring_cqe_seen(&ring, cqe);
-
     auto totalGathers = 0;
     auto throughputCalculationRate = 200;   // print xput every n ops
     
+    std::deque<sgbpf::Request*> reqs;
+    // reqs.reserve(numRequests + outstandingReqs);
     for (auto i = 0; i < outstandingReqs; i++) {
-        sqe = io_uring_get_sqe(&ring);
-        io_uring_prep_recv(sqe, service.ctrlSkFd(), NULL, sizeof(sg_msg_t), 0);
-        io_uring_sqe_set_flags(sqe, IOSQE_BUFFER_SELECT);
-        sqe->buf_group = 0;
-        sqe->user_data = 123;
-
-        service.scatter("SCATTER", 8);
-        io_uring_submit(&ring);
+        auto r = service.scatter("SCATTER", 8); // this will block
+        reqs.push_back(r);
     }
     auto gatherCount = 0;
     auto start = std::chrono::high_resolution_clock::now();
     while (totalGathers < numRequests) {
-        // wait for gather to complete
-        unsigned count = 0;
-        unsigned head;
-        // io_uring_wait_cqe(&ring, &cqe);
-        // this is wrong...
-        io_uring_for_each_cqe(&ring, head, cqe) {
-            ++count;
-            if (cqe->user_data == 123) {
-                auto bid = cqe->flags >> IORING_CQE_BUFFER_SHIFT;
-                auto resp = (sg_msg_t*) (buffer + bid * sizeof(sg_msg_t));
+        // wait for one gather to complete
+        service.processEvents();
+        for (auto it=reqs.begin(); it!=reqs.end(); ++it) {
+            auto req = *it;
+            if (req->isReady()) {
                 gatherCount++;
                 totalGathers++;
+                reqs.erase(it);
+                break;
             }
         }
-        io_uring_cq_advance(&ring, count);
 
-        service.processEvents();    // DISCARD_PK enabled, so this should be negligible
-
-        // send out another scatter
-        sqe = io_uring_get_sqe(&ring);
-        io_uring_prep_recv(sqe, service.ctrlSkFd(), NULL, sizeof(sg_msg_t), 0);
-        io_uring_sqe_set_flags(sqe, IOSQE_BUFFER_SELECT);
-        sqe->buf_group = 0;
-        sqe->user_data = 123;
-
-        service.scatter("SCATTER", 8);
-        io_uring_submit(&ring);
+        auto r = service.scatter("SCATTER", 8);
+        reqs.push_back(r);
 
         if (gatherCount == throughputCalculationRate) {
             auto end_time = std::chrono::high_resolution_clock::now();
@@ -163,56 +131,23 @@ void unloaded_latency_benchmark(int numRequests, sgbpf::Context& ctx) {
 
     auto workers = sgbpf::Worker::fromFile("workers.cfg");
     std::cout << "Workers loaded: " << workers.size() << std::endl;
-    sgbpf::Service service{ctx, workers, sgbpf::PacketAction::Discard};
-
-    io_uring ring;
-    io_uring_params ringParams;
-    memset(&ringParams, 0, sizeof(ringParams));
-
-    if (io_uring_queue_init_params(1024, &ring, &ringParams) < 0)
-        throw std::runtime_error{"Failed to initialise io_uring queue"};
-
-    // Preallocate and register buffers to receive the packets in
-    char* buffer = new char[numRequests * sizeof(sg_msg_t)];
-
-    io_uring_sqe* sqe = io_uring_get_sqe(&ring);
-    io_uring_prep_provide_buffers(sqe, buffer, sizeof(sg_msg_t), numRequests, 0, 0);
-    io_uring_submit(&ring);
-    io_uring_cqe* cqe;
-    io_uring_wait_cqe(&ring, &cqe);
-    if (cqe->res < 0)
-        throw std::runtime_error{"Failed to provide io_uring buffers to the kernel"};
-    io_uring_cqe_seen(&ring, cqe);
-
-    auto numCompletedGathers = 0;
+       sgbpf::Service service{
+        ctx, 
+        workers, 
+        sgbpf::PacketAction::Discard,
+        sgbpf::CtrlSockMode::Native
+    };
+    
     std::vector<uint64_t> times;
     times.reserve(numRequests);
     for (auto i = 0; i < numRequests; ++i) {
         BenchmarkTimer timer{times};
-        sqe = io_uring_get_sqe(&ring);
-        io_uring_prep_recv(sqe, service.ctrlSkFd(), NULL, sizeof(sg_msg_t), 0);
-        io_uring_sqe_set_flags(sqe, IOSQE_BUFFER_SELECT);
-        sqe->buf_group = 0;
-        sqe->user_data = 123;
         auto req = service.scatter("SCATTER", 8);
-        io_uring_submit_and_wait(&ring, 1);
 
-        unsigned count = 0;
-        unsigned head;
-        io_uring_for_each_cqe(&ring, head, cqe) {
-            ++count;
-            if (cqe->user_data == 123) {
-                auto bid = cqe->flags >> IORING_CQE_BUFFER_SHIFT;
-                auto resp = (sg_msg_t*) (buffer + bid * sizeof(sg_msg_t));
-                numCompletedGathers++;
-            }
-        }
-        io_uring_cq_advance(&ring, count);
-
-        service.processEvents(req->id());
+        service.processEvents();
+        assert(req->isReady());
     }
 
-    std::cout << "Num workers: " << workers.size() << std::endl;
     std::cout << "Avg unloaded latency: " << BenchmarkTimer::avgTime(times) << " us\n";
     std::cout << "Median unloaded latency: " << BenchmarkTimer::medianTime(times) << " us\n";
     std::cout << "Std dev unloaded latency: " << BenchmarkTimer::stdDev(times) << " us\n";

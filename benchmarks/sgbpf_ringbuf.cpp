@@ -165,6 +165,12 @@ int main(int argc, char** argv) {
         std::cerr << "Usage: " << argv[0] << " <path/to/bpfobjs> <ifname> <numReqs> <benchmark>" << std::endl;
         return 1;
     }
+
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    CPU_SET(std::thread::hardware_concurrency() - 1, &cpuset);
+    sched_setaffinity(0, sizeof(cpu_set_t), &cpuset);
+
     sgbpf::Context ctx{argv[1], argv[2]};
     int reqs = atoi(argv[3]);
     std::string option = argv[4];

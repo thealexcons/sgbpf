@@ -4,6 +4,7 @@
 #include <net/if.h>
 #include <iostream>
 #include <vector>
+#include <thread>
 #include <cassert>
 #include <fcntl.h>
 #include <sys/epoll.h>
@@ -164,6 +165,12 @@ int main(int argc, char* argv[]) {
         std::cerr << "Usage: " << argv[0] << " <num reqs> <mode>" << std::endl;
         return 1;
     }
+
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    CPU_SET(std::thread::hardware_concurrency() - 1, &cpuset);
+    sched_setaffinity(0, sizeof(cpu_set_t), &cpuset);
+
     int numRequests = atoi(argv[1]);
     std::string option = argv[2];
 

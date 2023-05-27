@@ -2,14 +2,11 @@
 CC = g++
 CFLAGS = -std=c++17 -g -O2 -Wall
 
-all: sgbpf naive naive_one_sk event async async_busy_wait
+all: sgbpf_default sgbpf_ringbuf sgbpf_iouring naive event async async_busy_wait
 
 ###################### BASELINE BENCHMARKS ####################
 
 naive: naive_sg.cpp
-	$(CC) $(CFLAGS) $^ -o $@
-
-naive_one_sk: naive_one_sk_sg.cpp
 	$(CC) $(CFLAGS) $^ -o $@
 
 event: event_sg.cpp
@@ -51,14 +48,21 @@ deinstall:
 # Note: must be in this order, otherwise it fails (and must be at the end of command)
 LDFLAGS := -L$(LIBSGBPF_LIB_DIR) -L$(LIBBPF_LIB_DIR) -lsgbpf -lbpf -lelf -luring
 INC := -I$(LIBSGBPF_HEADERS) -I$(LIBBPF_HEADERS)
-sgbpf: sgbpf.cpp
-	$(CC) $(CFLAGS) $(INC) $^ -o $@ $(LDFLAGS) -D IO_URING_CTRL_SK
+
+sgbpf_default: sgbpf_default.cpp
+	$(CC) $(CFLAGS) $(INC) $^ -o $@ $(LDFLAGS)
+
+sgbpf_iouring: sgbpf_iouring.cpp
+	$(CC) $(CFLAGS) $(INC) $^ -o $@ $(LDFLAGS)
+
+sgbpf_ringbuf: sgbpf_ringbuf.cpp
+	$(CC) $(CFLAGS) $(INC) $^ -o $@ $(LDFLAGS)
 
 reset_maps:
 	sudo rm /sys/fs/bpf/map_req_state
 	sudo rm /sys/fs/bpf/map_aggregated_response
 
 clean:
-	rm -f naive naive_one_sk event async async_busy_wait sgbpf
+	rm -f naive event async async_busy_wait sgbpf_default sgbpf_iouring sgbpf_ringbuf
 	rm -f *.o *.s
 	rm -f $(SG_PROGRAM)

@@ -72,10 +72,9 @@ private:
 };
 
 
-#ifdef IO_URING_CTRL_SK
 
 void throughput_benchmark(int numRequests, sgbpf::Context& ctx) {
-    std::cout << "Running throughput experiment (io_uring mode)" << std::endl;
+    std::cout << "Running throughput experiment" << std::endl;
 
     auto workers = sgbpf::Worker::fromFile("workers.cfg");
     std::cout << "Workers loaded: " << workers.size() << std::endl;
@@ -127,7 +126,7 @@ void throughput_benchmark(int numRequests, sgbpf::Context& ctx) {
 
 
 void unloaded_latency_benchmark(int numRequests, sgbpf::Context& ctx) {
-    std::cout << "Running unloaded latency experimen (io_uring mode)" << std::endl;
+    std::cout << "Running unloaded latency experiment" << std::endl;
 
     auto workers = sgbpf::Worker::fromFile("workers.cfg");
     std::cout << "Workers loaded: " << workers.size() << std::endl;
@@ -144,7 +143,7 @@ void unloaded_latency_benchmark(int numRequests, sgbpf::Context& ctx) {
         BenchmarkTimer timer{times};
         auto req = service.scatter("SCATTER", 8);
 
-        service.processEvents();
+        service.processEvents(req->id());
         assert(req->isReady());
     }
 
@@ -153,76 +152,6 @@ void unloaded_latency_benchmark(int numRequests, sgbpf::Context& ctx) {
     std::cout << "Std dev unloaded latency: " << BenchmarkTimer::stdDev(times) << " us\n";
 }
 
-#else
-
-void throughput_benchmark(int numRequests, sgbpf::Context& ctx) {
-    std::cout << "Running throughput experiment" << std::endl;
-
-    auto workers = sgbpf::Worker::fromFile("workers.cfg");
-    std::cout << "Workers loaded: " << workers.size() << std::endl;
-    sgbpf::Service service{ctx, workers, sgbpf::PacketAction::Discard};
-
-    auto totalGathers = 0;
-    auto throughputCalculationRate = 200;   // print xput every n ops
-    
-    auto outstandingReqs = 32;
-    for (auto i = 0; i < outstandingReqs; i++) {
-        service.scatter("SCATTER", 8);
-    }
-    sg_msg_t buf;
-    auto gatherCount = 0;
-    auto start = std::chrono::high_resolution_clock::now();
-    while (totalGathers < numRequests) {
-        // wait for gather to complete
-        std::cout << totalGathers << std::endl;
-        auto b = read(service.ctrlSkFd(), &buf, sizeof(sg_msg_t));
-        assert(b == sizeof(sg_msg_t));
-        service.processEvents();    // DISCARD_PK enabled, so this should be negligible
-
-        gatherCount++;
-        totalGathers++;
-
-        // send out another scatter
-        service.scatter("SCATTER", 8);
-
-        if (gatherCount == throughputCalculationRate) {
-            auto end_time = std::chrono::high_resolution_clock::now();
-            auto elapsed_time = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start);
-            auto tput = gatherCount / static_cast<double>(elapsed_time.count()) * 1000000;
-            std::cout << "Throughput: " << tput << " req/s (" << totalGathers << " ops completed)\n" ;
-            gatherCount = 0;
-            start = std::chrono::high_resolution_clock::now();
-        }
-    }
-
-}
-
-void unloaded_latency_benchmark(int numRequests, sgbpf::Context& ctx) {
-    std::cout << "Running unloaded latency experiment" << std::endl;
-
-    auto workers = sgbpf::Worker::fromFile("workers.cfg");
-    std::cout << "Workers loaded: " << workers.size() << std::endl;
-    sgbpf::Service service{ctx, workers, sgbpf::PacketAction::Discard};
-
-    sg_msg_t buf;
-    std::vector<uint64_t> times;
-    times.reserve(numRequests);
-    for (auto i = 0; i < numRequests; ++i) {
-        BenchmarkTimer timer{times};
-        auto req = service.scatter("SCATTER", 8);
- 
-        auto b = read(service.ctrlSkFd(), &buf, sizeof(sg_msg_t));
-        assert(b == sizeof(sg_msg_t));
-        service.processEvents(req->id());
-    }
-
-    std::cout << "Num workers: " << workers.size() << std::endl;
-    std::cout << "Avg unloaded latency: " << BenchmarkTimer::avgTime(times) << " us\n";
-    std::cout << "Median unloaded latency: " << BenchmarkTimer::medianTime(times) << " us\n";
-    std::cout << "Std dev unloaded latency: " << BenchmarkTimer::stdDev(times) << " us\n";
-}
-
-#endif
 
 int main(int argc, char** argv) {
 

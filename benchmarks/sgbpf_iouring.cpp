@@ -88,6 +88,11 @@ void throughput_benchmark(int numRequests, sgbpf::Context& ctx) {
     auto totalGathers = 0;
     auto throughputCalculationRate = 200;   // print xput every n ops
     
+    if (numRequests < throughputCalculationRate) {
+        std::cout << "Please specify a larger number of requests (at least 200)\n";
+        return;
+    }
+
     std::deque<sgbpf::Request*> reqs;
     // reqs.reserve(numRequests + outstandingReqs);
     for (auto i = 0; i < outstandingReqs; i++) {

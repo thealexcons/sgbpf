@@ -396,14 +396,6 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
     struct req_state* rs = bpf_map_lookup_elem(&map_req_state, &slot);
     CHECK_MAP_LOOKUP(rs, TC_ACT_SHOT);
 
-    // Lightweight XDP -> TC communication design pattern: data follows the packet
-    //    set field in XDP for skb, read in TC (data follows the packet)
-    //  atomic add in XDP, read direct from packet
-    // __u32* pk_count = (void*)(unsigned long) skb->data_meta;
-    // if (UNLIKELY( pk_count + 1 > (void*)(unsigned long) skb->data )) {
-    //     return TC_ACT_OK;
-    // }
-
     // If post_agg_count is -1, then it must have been set in the post aggregation
     // function if DISCARD_PK is specified and all required packets been aggregated.
     // If post_agg_count is N, then it was not modified after the increment in the post
@@ -462,8 +454,8 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         for (__u32 i = 0; i < RESP_MAX_VECTOR_SIZE; ++i) {
             ((uint32_t*)rb_data->body)[i] = ((uint32_t*)agg_entry->data)[i];
         }
-        // todo compare performance of wakeup flags
-        bpf_ringbuf_submit(rb_data, BPF_RB_FORCE_WAKEUP); // either this or 0 for the flag
+
+        bpf_ringbuf_submit(rb_data, 0);
         clear_vector(agg_entry->data);
         return TC_ACT_SHOT; // drop the final packet, as it is read via ringbuf
     }

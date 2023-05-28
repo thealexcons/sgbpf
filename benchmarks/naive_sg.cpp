@@ -63,9 +63,14 @@ void throughput_benchmark(int numRequests) {
     auto workers = Worker::fromFile("workers.cfg", true);
     ScatterGatherService service{workers};
 
-auto totalGathers = 0;
+    auto totalGathers = 0;
     auto throughputCalculationRate = 200;   // print xput every n ops
     
+    if (numRequests < throughputCalculationRate) {
+        std::cout << "Please specify a larger number of requests (at least 200)\n";
+        return;
+    }
+
     auto outstandingReqs = 128;
     for (auto i = 0; i < outstandingReqs; i++) {
         service.scatter("SCATTER", 8);

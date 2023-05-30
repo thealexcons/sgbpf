@@ -2,7 +2,7 @@
 CC = g++
 CFLAGS = -std=c++17 -g -O2 -Wall
 
-all: sgbpf_default sgbpf_ringbuf sgbpf_iouring naive event async async_busy_wait
+all: sgbpf_default sgbpf_ringbuf sgbpf_iouring sgbpf_user_agg naive event async async_busy_wait
 
 ###################### BASELINE BENCHMARKS ####################
 
@@ -58,11 +58,14 @@ sgbpf_iouring: sgbpf_iouring.cpp
 sgbpf_ringbuf: sgbpf_ringbuf.cpp
 	$(CC) $(CFLAGS) $(INC) $^ -o $@ $(LDFLAGS)
 
+sgbpf_user_agg: sgbpf_user_aggregation.cpp
+	$(CC) $(CFLAGS) $(INC) $^ -o $@ $(LDFLAGS)
+
 reset_maps:
 	sudo rm /sys/fs/bpf/map_req_state
 	sudo rm /sys/fs/bpf/map_aggregated_response
 
 clean:
-	rm -f naive event async async_busy_wait sgbpf_default sgbpf_iouring sgbpf_ringbuf
+	rm -f naive event async async_busy_wait sgbpf_default sgbpf_iouring sgbpf_ringbuf sgbpf_user_agg
 	rm -f *.o *.s
 	rm -f $(SG_PROGRAM)

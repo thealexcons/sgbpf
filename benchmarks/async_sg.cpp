@@ -20,6 +20,7 @@ class ScatterGatherService {
     uint16_t                   d_bgid = 42;
     char*                      d_buffers;
     int                        d_skFd;
+    constexpr static const int NUM_BUFFERS = std::numeric_limits<uint16_t>::max(); // for fair comparison with sgbpf
 
     constexpr static uint64_t READ_OP = 0xdeadbeef;
 
@@ -33,7 +34,7 @@ public:
         d_skFd = socket(AF_INET, SOCK_DGRAM, 0);
 
         d_msgHdrs = new msghdr[d_workers.size()];
-        d_buffers = new char[sizeof(sg_msg_t) * d_workers.size()];
+        d_buffers = new char[sizeof(sg_msg_t) * NUM_BUFFERS];
 
         // Setup io uring
         io_uring_params params;
@@ -44,7 +45,7 @@ public:
 
         // Preallocate and register buffers to receive the packets in
         io_uring_sqe* sqe = io_uring_get_sqe(&d_ring);
-        io_uring_prep_provide_buffers(sqe, d_buffers, sizeof(sg_msg_t), d_workers.size(), d_bgid, 0);
+        io_uring_prep_provide_buffers(sqe, d_buffers, sizeof(sg_msg_t), NUM_BUFFERS, d_bgid, 0);
         io_uring_submit(&d_ring);
         io_uring_cqe* cqe;
         io_uring_wait_cqe(&d_ring, &cqe);

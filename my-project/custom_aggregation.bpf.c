@@ -26,26 +26,11 @@ int aggregation_prog(struct xdp_md* xdp_ctx) {
 
     // LOOK INTO PER SOCKET STORAGE FOR THE FUTURE WORK SECTION
 
-    // TODO: Unify aggregation types for VECTOR and SCALAR data (in common.h)
-    // fsanitize issue
-
-    // important design choice (in the evaluation):
-    //   scattering in TC
-    //   scattering in user space (with io_uring)
-    //  Num syscalls is same in both, but what about number of memcpys?
-    //  Evaluate throughput (req/s)
-
-    // have option to early drop individual packets after aggregation
-
     //  5. start thinking about evaluation (see below)
 
     // Research socket layer programs and their capabilities
     // redirection, per-socket storage, etc. to see if this system could be
     // replicated in TCP. Preliminary work under "future work" section in report 
-
-    // week after:
-    // multi-packet vector aggregation could be done using sequence numbers
-
 
     // key metrics: 
     //      1- throughput (number of requests per second) 

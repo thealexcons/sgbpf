@@ -108,8 +108,8 @@ int main(int argc, char *argv[]) {
 
       // while ((bytes = recvfrom(sock, buf, sizeof(sg_msg_t), 0, (struct sockaddr *) &client, &clientSize)) > 0) {
       sg_msg_t* msg = (sg_msg_t*) buf;
-      printf("[WORKER %d] got req with ID %d (total bytes = %d)\n", worker_port, msg->hdr.req_id, totalBytes);
-      fflush(stdout);
+      // printf("[WORKER %d] got req with ID %d (total bytes = %d)\n", worker_port, msg->hdr.req_id, totalBytes);
+      // fflush(stdout);
 
       // Vector example: send vector of increasing numbers
       sg_msg_t resp_msg;
@@ -129,9 +129,12 @@ int main(int argc, char *argv[]) {
           continue;
       }
 
-      printf("[WORKER %d] sent response for req with ID %d\n", worker_port, resp_msg.hdr.req_id);
-      fflush(stdout);
+      // printf("[WORKER %d] sent response for req with ID %d\n", worker_port, resp_msg.hdr.req_id);
+      // fflush(stdout);
       completedReqs++;
+
+      // printf("[WORKER %d] handled reqs: %d\n", worker_port, completedReqs);
+      // fflush(stdout);
   }
 
   fprintf(stdout, "[WORKER %d] shutting down", worker_port);

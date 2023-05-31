@@ -88,6 +88,8 @@ void throughput_benchmark(int numRequests, sgbpf::Context& ctx) {
     auto totalGathers = 0;
     auto throughputCalculationRate = 200;   // print xput every n ops
     
+    std::vector<uint64_t> throughputValues;
+
     if (numRequests < throughputCalculationRate) {
         std::cout << "Please specify a larger number of requests (at least 200)\n";
         return;
@@ -121,11 +123,13 @@ void throughput_benchmark(int numRequests, sgbpf::Context& ctx) {
             auto end_time = std::chrono::high_resolution_clock::now();
             auto elapsed_time = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start);
             auto tput = gatherCount / static_cast<double>(elapsed_time.count()) * 1000000;
+            throughputValues.push_back(tput);
             std::cout << "Throughput: " << tput << " req/s (" << totalGathers << " ops completed)\n" ;
             gatherCount = 0;
             start = std::chrono::high_resolution_clock::now();
         }
     }
+    std::cout << "!!!!!!! Average throughput = " << BenchmarkTimer::avgTime(throughputValues) << "req/s" << std::endl;
 
 }
 

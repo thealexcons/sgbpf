@@ -182,6 +182,8 @@ void throughput_benchmark(int numRequests) {
         std::cout << "Please specify a larger number of requests (at least 200)\n";
         return;
     }
+    
+    std::vector<uint64_t> throughputValues;
 
     auto outstandingReqs = 128;
     for (auto i = 0; i < outstandingReqs; i++) {
@@ -205,11 +207,13 @@ void throughput_benchmark(int numRequests) {
             auto end_time = std::chrono::high_resolution_clock::now();
             auto elapsed_time = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start);
             auto tput = gatherCount / static_cast<double>(elapsed_time.count()) * 1000000;
+            throughputValues.push_back(tput);
             std::cout << "Throughput: " << tput << " req/s (" << totalGathers << " ops completed)\n" ;
             gatherCount = 0;
             start = std::chrono::high_resolution_clock::now();
         }
     }
+    std::cout << "!!!!!!! Average throughput = " << BenchmarkTimer::avgTime(throughputValues) << "req/s" << std::endl;
 
 }
 
@@ -219,6 +223,7 @@ void unloaded_latency_benchmark(int numRequests) {
     auto workers = Worker::fromFile("workers.cfg", true);
     ScatterGatherService service{workers};
 
+    int reqs = 0;
     uint32_t data[1024]; // reserve enough memory for the aggregated data
     std::vector<uint64_t> times;
     times.reserve(numRequests);
@@ -228,6 +233,10 @@ void unloaded_latency_benchmark(int numRequests) {
 
         memset(data, 0, sizeof(data));
         service.gather<uint32_t>(data);
+        reqs++;
+
+       if (reqs % 100 == 0)
+		std::cout << reqs << '\n';
     }
 
     std::cout << "Avg unloaded latency: " << BenchmarkTimer::avgTime(times) << " us\n";

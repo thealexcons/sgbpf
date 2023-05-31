@@ -92,6 +92,8 @@ void throughput_benchmark(int numRequests, sgbpf::Context& ctx) {
         return;
     }
 
+    std::vector<uint64_t> throughputValues;
+
     auto outstandingReqs = 32;
     for (auto i = 0; i < outstandingReqs; i++) {
         service.scatter("SCATTER", 8);
@@ -115,11 +117,13 @@ void throughput_benchmark(int numRequests, sgbpf::Context& ctx) {
             auto end_time = std::chrono::high_resolution_clock::now();
             auto elapsed_time = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start);
             auto tput = gatherCount / static_cast<double>(elapsed_time.count()) * 1000000;
+            throughputValues.push_back(tput);
             std::cout << "Throughput: " << tput << " req/s (" << totalGathers << " ops completed)\n" ;
             gatherCount = 0;
             start = std::chrono::high_resolution_clock::now();
         }
     }
+    std::cout << "!!!!!!! Average throughput = " << BenchmarkTimer::avgTime(throughputValues) << "req/s" << std::endl;
 
 }
 

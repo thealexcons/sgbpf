@@ -23,7 +23,6 @@ inline void addSocketRead(io_uring *ring, int fd, uint16_t bgid, size_t message_
     io_uring_prep_recv(sqe, fd, NULL, message_size, 0);
     io_uring_sqe_set_flags(sqe, flags);
     sqe->buf_group = bgid;
-    sqe->ioprio = IORING_RECVSEND_POLL_FIRST;
 
     conn_info_t conn_i = {
         .fd = fd,

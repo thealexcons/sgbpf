@@ -170,8 +170,6 @@ void unloaded_latency_benchmark(int numRequests, sgbpf::Context& ctx) {
         auto b = read(service.ctrlSkFd(), &buf, sizeof(sg_msg_t));
         assert(b == sizeof(sg_msg_t));
 
-        // TODO INVESTIGATE WHY NOT ADDING TO BUFFERPOINTERS???
-
         service.processEvents(req->id());
         for (auto [wfd, ptrs] : req->bufferPointers()) {
             assert(ptrs.size() == 1);
@@ -180,7 +178,6 @@ void unloaded_latency_benchmark(int numRequests, sgbpf::Context& ctx) {
             for (auto j = 0u; j < RESP_MAX_VECTOR_SIZE; j++) {
                 auto buf = (sg_msg_t*) req->data(ptr);
                 data[j] += ((uint32_t*) buf->body)[j];
-                std::cout << ((uint32_t*) buf->body)[j] << std::endl;
             }
         }
     }

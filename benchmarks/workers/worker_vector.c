@@ -18,10 +18,15 @@
 
 #include "common.h"
 
+static int completedReqs = 0;
+
+
 void sig_handler(int signum){
+  printf("num requests served: %d", completedReqs);
   fflush(stdout);
   exit(0);
 }
+
 
 int main(int argc, char *argv[]) {
 
@@ -96,14 +101,15 @@ int main(int argc, char *argv[]) {
       if (bytes < 0) {
           printf("[WORKER %d] recvfrom() failed. Got return %d and errno = %d\n", 
                           worker_port, bytes, errno);
+          fflush(stdout);
           continue;
       }
       totalBytes += bytes;
 
       // while ((bytes = recvfrom(sock, buf, sizeof(sg_msg_t), 0, (struct sockaddr *) &client, &clientSize)) > 0) {
       sg_msg_t* msg = (sg_msg_t*) buf;
-
       printf("[WORKER %d] got req with ID %d (total bytes = %d)\n", worker_port, msg->hdr.req_id, totalBytes);
+      fflush(stdout);
 
       // Vector example: send vector of increasing numbers
       sg_msg_t resp_msg;
@@ -119,10 +125,13 @@ int main(int argc, char *argv[]) {
       memmove(resp_msg.body, vec, resp_msg.hdr.body_len);
       if (sendto(sock, &resp_msg, sizeof(sg_msg_t), 0, (struct sockaddr *)&client, clientSize) < 0) {
           printf("[WORKER %d] sendto() failed on req ID %d\n", worker_port, msg->hdr.req_id);
+          fflush(stdout);
           continue;
       }
 
       printf("[WORKER %d] sent response for req with ID %d\n", worker_port, resp_msg.hdr.req_id);
+      fflush(stdout);
+      completedReqs++;
   }
 
   fprintf(stdout, "[WORKER %d] shutting down", worker_port);

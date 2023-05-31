@@ -427,7 +427,6 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         // at this point, any redundant packet trying to update the aggregated 
         // response is dropped before executing the aggregation logic
         
-        skb->mark = 0xdeadbeef;
 
         const __u32 zero = 0;
         struct ctrl_sk_info* ctrl_sk = bpf_map_lookup_elem(&map_gather_ctrl_port, &zero);

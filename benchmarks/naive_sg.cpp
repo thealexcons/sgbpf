@@ -110,6 +110,8 @@ void unloaded_latency_benchmark(int numRequests) {
     std::vector<uint64_t> times;
     times.reserve(numRequests);
     for (auto i = 0; i < numRequests; ++i) {
+        // std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
         BenchmarkTimer timer{times};
         service.scatter("SCATTER", 8);
 

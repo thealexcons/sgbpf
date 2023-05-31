@@ -6,8 +6,11 @@ namespace sgbpf
 Request::Request(int requestID, 
                  const ReqParams& params,
                  const std::vector<char*>* packetBufferPool,
-                 const std::vector<Worker>* workers)
-    : d_requestID{requestID}
+                 const std::vector<Worker>* workers,
+                 PacketAction packetAction,
+                 CtrlSockMode ctrlSockMode)
+    : d_isActive{true}
+    , d_requestID{requestID}
     , d_workers{workers}
     , d_packetBufferPool{packetBufferPool}
     , d_expectedPacketsPerMessage{params.numPksPerRespMsg}
@@ -15,9 +18,12 @@ Request::Request(int requestID,
     , d_timeOut{params.timeout}
     , d_completionPolicy{params.completionPolicy}
     , d_numWorkersToWait{params.numWorkersToWait}
+    , d_ctrlSockMode{ctrlSockMode}
+    , d_ctrlSockReady{false}
 {
-    // TODO Only do if ALLOW_PK is specified, otherwise it is unnecessary allocation
-    d_workerBufferPtrs.reserve(d_workers->size());
+    if (packetAction == PacketAction::Allow) {
+        d_workerBufferPtrs.reserve(d_workers->size());
+    }
 }
 
 bool Request::hasTimedOut() const {

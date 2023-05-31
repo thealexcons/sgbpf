@@ -33,8 +33,24 @@ public:
     ReqParams() = default;
 };
 
-// Forward declaration of Service
+// Forward declarations
 class Service;
+
+// These are defined here to avoid issues with circular dependencies
+// and forward declaring enums
+enum class PacketAction 
+{
+    Discard,
+    Allow,
+};
+
+enum class CtrlSockMode
+{
+    DefaultUnix,    // use as a raw Unix file descriptor
+    Block,          // use io_uring + buffer, blocks until ctrl sk is ready
+    Epoll           // use epoll notification-based polling with callback
+};
+
 
 class Request
 {
@@ -57,6 +73,7 @@ public:
 
 private:
     // DATA MEMBERS
+    bool                       d_isActive = false;
     int                        d_requestID;
     const std::vector<Worker>* d_workers;
     const std::vector<char*>*  d_packetBufferPool;
@@ -65,7 +82,11 @@ private:
     std::chrono::microseconds  d_timeOut;
     GatherCompletionPolicy     d_completionPolicy;
     unsigned int               d_numWorkersToWait;
-    
+    // Fields only relevant if CtrlSockMode::Block is set
+    CtrlSockMode               d_ctrlSockMode;
+    bool                       d_ctrlSockReady;
+    sg_msg_t                   d_ctrlSkBuf;
+
     std::chrono::time_point<std::chrono::steady_clock> d_startTime;
 
     // Points to the location of a packet buffer in the global packet memory buffer
@@ -86,22 +107,38 @@ public:
     Request(int requestID, 
             const ReqParams& params,
             const std::vector<char*>* packetBufferPool,
-            const std::vector<Worker>* workers);
+            const std::vector<Worker>* workers,
+            PacketAction packetAction,
+            CtrlSockMode ctrlSockMode);
 
 
     inline int id() const { return d_requestID; }
 
+    inline bool isActive() const { return d_isActive; }
+
     inline const std::vector<Worker>& workers() const { return *d_workers; }
 
-    inline const WorkerBufferPointerMap& bufferPointers() const { return d_workerBufferPtrs; };
+    // Only makes sense if CtrlSockMode::Block is set or if PacketAction::Allow is set
+    inline bool isReady(bool ctrlSockOnly = false) const { 
+        if (d_ctrlSockMode == CtrlSockMode::Block)
+            return ctrlSockOnly ? d_ctrlSockReady : d_ctrlSockReady && d_status == Status::Ready;
 
-    inline bool isReady() const { return d_status == Status::Ready; }
+        return d_status == Status::Ready;
+    }
 
     inline bool isExpired() const { return d_status == Status::TimedOut; }
+
+    // Methods below are only relevant if PacketAction::Discard is set
+
+    inline const WorkerBufferPointerMap& bufferPointers() const { return d_workerBufferPtrs; };
 
     inline const char* data(const PacketBufferPointer& packetPtr) const {
         return ((*d_packetBufferPool)[packetPtr.bgid] + packetPtr.bid * Request::MaxBufferSize);
     }
+
+    // Methods below are only relevant if CtrlSockMode::Block is set
+
+    inline const sg_msg_t* ctrlSockData() const { return &d_ctrlSkBuf; }
 
 protected:
     bool hasTimedOut() const;

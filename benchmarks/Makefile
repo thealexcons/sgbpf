@@ -1,4 +1,27 @@
-########### SETUP ############
+
+CC = g++
+CFLAGS = -std=c++17 -g -O2 -Wall
+
+all: sgbpf_default sgbpf_ringbuf sgbpf_iouring sgbpf_user_agg naive event async async_busy_wait
+
+###################### BASELINE BENCHMARKS ####################
+
+naive: naive_sg.cpp
+	$(CC) $(CFLAGS) $^ -o $@
+
+event: event_sg.cpp
+	$(CC) $(CFLAGS) $^ -o $@
+
+async: async_sg.cpp
+	$(CC) $(CFLAGS) $^ -o $@ -luring
+
+async_busy_wait: async_sg.cpp
+	$(CC) $(CFLAGS) $^ -o $@ -luring -D BUSY_WAITING_MODE
+
+
+###################### SGBPF BENCHMARK ####################
+
+########## SETUP ############
 LIBSGBPF_DIR := ../sgbpf/
 ##############################
 
@@ -10,9 +33,6 @@ LIBBPF_HEADERS := $(LIBSGBPF_DIR)/dep/libbpf/src/root/usr/include/
 LIBBPF_LIB_DIR  := $(LIBSGBPF_DIR)/dep/libbpf/src/
 LIBBPF_HEADERS_DESTDIR := root
 
-SG_PROGRAM := sg_program
-
-all: $(SG_PROGRAM)
 
 export DESTDIR := $(LIBBPF_HEADERS_DESTDIR)
 install:
@@ -20,25 +40,32 @@ install:
 	make --directory=$(LIBBPF_LIB_DIR) install_headers
 	make --directory=$(LIBSGBPF_DIR) all
 
-
 deinstall:
 	make --directory=$(LIBBPF_LIB_DIR) clean
 	rm -rf $(LIBBPF_LIB_DIR)/$(LIBBPF_HEADERS_DESTDIR)
 	make --directory=$(LIBSGBPF_DIR) clean
 
-
-CC := g++
-CFLAGS := -std=c++17 -O2 -g -Wall
 # Note: must be in this order, otherwise it fails (and must be at the end of command)
 LDFLAGS := -L$(LIBSGBPF_LIB_DIR) -L$(LIBBPF_LIB_DIR) -lsgbpf -lbpf -lelf -luring
 INC := -I$(LIBSGBPF_HEADERS) -I$(LIBBPF_HEADERS)
-$(SG_PROGRAM): main.cpp
+
+sgbpf_default: sgbpf_default.cpp
 	$(CC) $(CFLAGS) $(INC) $^ -o $@ $(LDFLAGS)
 
-clean:
-	rm -f *.o *.s
-	rm -f $(SG_PROGRAM)
+sgbpf_iouring: sgbpf_iouring.cpp
+	$(CC) $(CFLAGS) $(INC) $^ -o $@ $(LDFLAGS)
+
+sgbpf_ringbuf: sgbpf_ringbuf.cpp
+	$(CC) $(CFLAGS) $(INC) $^ -o $@ $(LDFLAGS)
+
+sgbpf_user_agg: sgbpf_user_aggregation.cpp
+	$(CC) $(CFLAGS) $(INC) $^ -o $@ $(LDFLAGS)
 
 reset_maps:
 	sudo rm /sys/fs/bpf/map_req_state
 	sudo rm /sys/fs/bpf/map_aggregated_response
+
+clean:
+	rm -f naive event async async_busy_wait sgbpf_default sgbpf_iouring sgbpf_ringbuf sgbpf_user_agg
+	rm -f *.o *.s
+	rm -f $(SG_PROGRAM)

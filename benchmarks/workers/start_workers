@@ -6,7 +6,10 @@ import sys, os, subprocess, time, signal, resource
 # This will generate a workers.cfg file and run the workers
 # for the number of seconds provided
 
-#<DATA_MODE> = "vector", "multipacket", ""
+#<DATA_MODE> = "vector", "multipacket", "scalar"
+
+print("USE ./run_workers.sh INSTEAD")
+exit(0)
 
 startPort = int(sys.argv[1])
 numServers = int(sys.argv[2])
@@ -15,7 +18,7 @@ dataMode = sys.argv[4] if len(sys.argv) >= 5 else ""
 
 portRange = range(startPort, startPort + numServers)
 
-with open("workers.cfg", "w") as f:
+with open("../workers.cfg", "w") as f:
     for i in portRange:
         f.write(f"127.0.0.1:{i}")
         if i == startPort + numServers - 1:

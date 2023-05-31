@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <thread>
+#include <cmath>
 
 #include <net/if.h>
 #include <unistd.h>
@@ -14,58 +15,21 @@
 #include <sgbpf/Service.h>
 #include <sgbpf/Common.h>
 
-class BenchmarkTimer {
-public:
-    BenchmarkTimer(std::vector<uint64_t>& times)
-        : start_time{std::chrono::high_resolution_clock::now()}
-        , times_vec{times}
-    {}
-    
-    ~BenchmarkTimer() {
-        auto end_time = std::chrono::high_resolution_clock::now();
-        auto elapsed_time = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-        times_vec.push_back(elapsed_time.count());
-    }
-
-    static uint64_t maxTime(const std::vector<uint64_t>& times) {
-        return *std::max_element(times.begin(), times.end());
-    }
-
-    static uint64_t minTime(const std::vector<uint64_t>& times) {
-        return *std::min_element(times.begin(), times.end());
-
-    }
-
-    static double avgTime(const std::vector<uint64_t>& times) {
-        int sum = 0;
-        for (const auto& num : times) {
-            sum += num;
-        }
-        return static_cast<double>(sum) / times.size();
-    }
-
-    static uint64_t medianTime(std::vector<uint64_t> times) {
-        size_t n = times.size();
-        std::sort(times.begin(), times.end());
-        
-        if (n % 2 == 0) {
-            return (times[n/2 - 1] + times[n/2]) / 2.0;
-        } else {
-            return times[n/2];
-        }
-    }
-
-private:
-    std::chrono::high_resolution_clock::time_point  start_time;
-    std::vector<uint64_t>&                          times_vec;
-};
-
 int main(int argc, char** argv) {
 
     if (argc < 3) {
-        std::cerr << "Invalid usage. Correct usage: " << argv[0] << " <path/to/bpfobjs> <ifname>" << std::endl;
+        std::cerr << "Usage: " << argv[0] << " <path/to/bpfobjs> <ifname>" << std::endl;
         return 1;
     }
+
+    // start with ctrl sk io_uring support
+    // test and benchmark compared with read()
+
+    // IS EPOLL ON CTRL SK WORTH IT?? maybe if we get multiple notifs then yes...
+    // then move onto epoll via ringbuf
+    // test and benchmark compared with read()
+
+
     // sudo ./sg_program bpfobjs lo
     // export OUTPUT_BPF_OBJ_DIR=$(pwd)/bpfobjs
 
@@ -75,55 +39,59 @@ int main(int argc, char** argv) {
     sgbpf::Context ctx{argv[1], argv[2]};
 
     auto workers = sgbpf::Worker::fromFile("workers.cfg");
-    sgbpf::Service service{ctx, workers};
-    
+    sgbpf::Service service{
+        ctx, 
+        workers, 
+        sgbpf::PacketAction::Discard,    // We only care about the aggregated data
+        sgbpf::CtrlSockMode::Epoll      // Causes scatter() to block on the ctrl sk
+    };
+
+    service.setCtrlSkCallback([](char* data, int reqID) -> void {
+        std::cout << "got agg data for req " << reqID << std::endl;
+        for (auto j = 0u; j < RESP_MAX_VECTOR_SIZE; j++) {
+            std::cout << "vec[" << j << "] = " << ((uint32_t*) data)[j] << std::endl;
+        }
+    });
+
     // int flags = fcntl(sg.ctrlSkFd(), F_GETFL, 0);
     // fcntl(service.ctrlSkFd(), F_SETFL, flags | O_NONBLOCK);
 
     // EXAMPLE 1: Vector-based data (with in-kernel aggregation)
     sgbpf::ReqParams params; // set params here....
-    params.completionPolicy = sgbpf::GatherCompletionPolicy::WaitN;
-    params.numWorkersToWait = 10;
-    params.timeout = std::chrono::microseconds{100*1000}; // 10 ms
-    
-    constexpr int reqs = 1;
-    std::vector<uint64_t> times;
-    times.reserve(reqs);
-    auto start = std::chrono::high_resolution_clock::now();
-    for (auto i = 0u; i < reqs; i++) {
-        // BenchmarkTimer t{times};
-        auto req = service.scatter("SCATTER", 8, params);
+    params.completionPolicy = sgbpf::GatherCompletionPolicy::WaitAll;
+    params.numWorkersToWait = workers.size();
+    params.timeout = std::chrono::microseconds{50000 * 100};
 
-        sg_msg_t buf;
-        auto b = read(service.ctrlSkFd(), &buf, sizeof(sg_msg_t));
-        assert(b == sizeof(sg_msg_t));
-        assert(buf.hdr.req_id == req->id());
+    auto req = service.scatter("SCATTER", 8, params);
 
-        service.processEvents(req->id());
+    // sg_msg_t buf;
+    // auto b = read(service.ctrlSkFd(), &buf, sizeof(sg_msg_t));
+    // assert(b == sizeof(sg_msg_t));
 
-        // for (const auto& [wfd, ptrList] : req->bufferPointers()) {
-        //     auto msg = (sg_msg_t*) req->data(ptrList[0]);
-        //     std::cout << "--- INDIVIDUAL PK: " << ((uint32_t*)msg->body)[33]  << std::endl;
-        // }
+    while (1) {
+        int completions = service.epollWaitCtrlSock(50);
+        if (completions > 0)
+            break;
     }
-    auto end_time = std::chrono::high_resolution_clock::now();
-    auto elapsed_time = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start);
+    service.processEvents();
+    // std::cout << req->isReady() << std::endl;
+    // assert(req->isReady());
 
-    // buf size (8192) = 187886 us
-    // buf size (1024) = 57917 us
-
-
-    std::cout << "Total elapsed time (us) = " << elapsed_time.count() << '\n';
-    // std::cout << "Avg throughput (req/s) = " << reqs / (std::chrono::duration_cast<std::chrono::seconds>(elapsed_time).count()) << std::endl;
-
-    // while (1) {
-    //     std::this_thread::yield();
+    // auto buf = req->ctrlSockData();
+    
+    // for (auto j = 0u; j < RESP_MAX_VECTOR_SIZE; j++) {
+    //     std::cout << "vec[" << j << "] = " << ((uint32_t*) buf->body)[j] << std::endl;
+    //     assert(((uint32_t*) buf->body)[j] == workers.size() * j);
     // }
-
-    // std::cout << "Max E2E latency (us) = " << BenchmarkTimer::maxTime(times) << std::endl;
-    // std::cout << "Min E2E latency (us) = " << BenchmarkTimer::minTime(times) << std::endl;
-    // std::cout << "Avg E2E latency (us) = " << BenchmarkTimer::avgTime(times) << std::endl;
-    // std::cout << "Median E2E latency (us) = " << BenchmarkTimer::medianTime(times) << std::endl;
+    
+    // std::cout << "\n\n";
+    // for (auto [wfd, ptrs] : req->bufferPointers()) {
+    //     std::cout << "Worker " << wfd  << std::endl;
+    //     for (auto ptr : ptrs) {
+    //         auto r = (sg_msg_t*) req->data(ptr);
+    //         std::cout << "  " << ((uint32_t*)r->body)[10] << std::endl;
+    //     }
+    // }
 
     // WAIT ALL WORKS PERFECTLY FINE
     // MUST BE RELATED TO THE DROPPED PACKETS IN WAIT_N ??

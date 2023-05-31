@@ -1,5 +1,5 @@
 ########### SETUP ############
-LIBSGBPF_DIR := ../sgbpf/
+LIBSGBPF_DIR := ../../sgbpf/
 ##############################
 
 LIBSGBPF_HEADERS := $(LIBSGBPF_DIR)/include/
@@ -10,9 +10,10 @@ LIBBPF_HEADERS := $(LIBSGBPF_DIR)/dep/libbpf/src/root/usr/include/
 LIBBPF_LIB_DIR  := $(LIBSGBPF_DIR)/dep/libbpf/src/
 LIBBPF_HEADERS_DESTDIR := root
 
-SG_PROGRAM := sg_program
+LOADER := loader
+BPF_PROG := xdp_ringbuf.bpf.o
 
-all: $(SG_PROGRAM)
+all: $(LOADER) $(BPF_PROG)
 
 export DESTDIR := $(LIBBPF_HEADERS_DESTDIR)
 install:
@@ -27,18 +28,14 @@ deinstall:
 	make --directory=$(LIBSGBPF_DIR) clean
 
 
-CC := g++
-CFLAGS := -std=c++17 -O2 -g -Wall
-# Note: must be in this order, otherwise it fails (and must be at the end of command)
-LDFLAGS := -L$(LIBSGBPF_LIB_DIR) -L$(LIBBPF_LIB_DIR) -lsgbpf -lbpf -lelf -luring
-INC := -I$(LIBSGBPF_HEADERS) -I$(LIBBPF_HEADERS)
-$(SG_PROGRAM): main.cpp
-	$(CC) $(CFLAGS) $(INC) $^ -o $@ $(LDFLAGS)
+$(LOADER): loader.cpp
+	g++ -std=c++17 -I$(LIBSGBPF_HEADERS) -I$(LIBBPF_HEADERS) -L$(LIBSGBPF_LIB_DIR) -L$(LIBBPF_LIB_DIR) -g -Wall $^ -o $@ -lbpf -lsgbpf -lelf -luring
+
+
+$(BPF_PROG): xdp_ringbuf.bpf.c
+	clang -target bpf -D __BPF_TRACING__ -I$(LIBBPF_HEADERS) -g -Wall -Werror -O2 -c $^ -o $@
+
 
 clean:
 	rm -f *.o *.s
-	rm -f $(SG_PROGRAM)
-
-reset_maps:
-	sudo rm /sys/fs/bpf/map_req_state
-	sudo rm /sys/fs/bpf/map_aggregated_response
+	rm -f $(LOADER)

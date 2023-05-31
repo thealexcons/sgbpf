@@ -9,7 +9,9 @@
 #include "Common.h"
 
 #include <filesystem>
+#include <iostream>
 #include <net/if.h>
+#include <sys/resource.h>
 #include <liburing.h>
 
 namespace sgbpf {
@@ -34,6 +36,7 @@ private:
     ebpf::Map               d_workersHashMap;   
     ebpf::Map               d_appPortMap;   
     ebpf::Map               d_gatherCtrlPortMap;   
+    ebpf::Map               d_ctrlSkRingBufMap;   
 
     // Object names
     constexpr static const auto MAIN_SG_BPF_OBJ_NAME = "scatter_gather.bpf.o";
@@ -44,6 +47,7 @@ private:
     constexpr static const auto WORKERS_HASH_MAP_NAME = "map_workers_resp_status";
     constexpr static const auto APP_PORT_MAP_NAME = "map_application_port";
     constexpr static const auto GATHER_CTRL_PORT_MAP_NAME = "map_gather_ctrl_port";
+    constexpr static const auto CTRL_SOCK_RINGBUF_MAP = "map_ctrl_sk_ringbuf";
 
     constexpr static const auto ZERO = 0;
 
@@ -52,10 +56,11 @@ public:
     ~Context();
 
     void setScatterPort(uint16_t port);
-    void setGatherControlPort(uint16_t port);
+    void setGatherControlPort(uint16_t port, bool useRingBufNotifs);
 
     ebpf::Map& workersMap() { return d_workersMap; };
     ebpf::Map& workersHashMap() { return d_workersHashMap; };
+    ebpf::Map& ctrlSkRingBufMap() { return d_ctrlSkRingBufMap; };
 };
 
 

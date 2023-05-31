@@ -209,7 +209,7 @@ int scatter_prog(struct __sk_buff* skb) {
         rs->num_workers = sgh->hdr.num_pks;
 
         #ifdef BPF_DEBUG_PRINT
-            bpf_printk("Got num workers to WAIT = %d", rs->num_workers);
+        bpf_printk("Got num workers to WAIT = %d", rs->num_workers);
         #endif
 
         // Clone the outgoing packet to all the registered workers
@@ -280,7 +280,7 @@ int gather_prog(struct xdp_md* ctx) {
         return XDP_DROP;
 
     #ifdef BPF_DEBUG_PRINT
-    bpf_printk("got to gather XDP Prog with resp from worker %d", bpf_ntohs(worker.worker_port));
+    // bpf_printk("got to gather XDP Prog with resp from worker %d", bpf_ntohs(worker.worker_port));
     #endif
 
     // If this is a multi-packet message, forward the packet without aggregation
@@ -390,19 +390,11 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         || resp_msg->hdr.msg_type != GATHER_MSG)
         return TC_ACT_OK;
 
-
-    __u32 slot = GET_REQ_MAP_SLOT(resp_msg->hdr.req_id);
+    __u32 req_id_copy = resp_msg->hdr.req_id;   // used after modifying pk pointers
+    __u32 slot = GET_REQ_MAP_SLOT(req_id_copy);
 
     struct req_state* rs = bpf_map_lookup_elem(&map_req_state, &slot);
     CHECK_MAP_LOOKUP(rs, TC_ACT_SHOT);
-
-    // Lightweight XDP -> TC communication design pattern: data follows the packet
-    //    set field in XDP for skb, read in TC (data follows the packet)
-    //  atomic add in XDP, read direct from packet
-    // __u32* pk_count = (void*)(unsigned long) skb->data_meta;
-    // if (UNLIKELY( pk_count + 1 > (void*)(unsigned long) skb->data )) {
-    //     return TC_ACT_OK;
-    // }
 
     // If post_agg_count is -1, then it must have been set in the post aggregation
     // function if DISCARD_PK is specified and all required packets been aggregated.
@@ -414,10 +406,6 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         #ifdef BPF_DEBUG_PRINT
         bpf_printk("!!! REQUEST %d COMPLETED WITH COUNT, NOTIFYING CTRL SOCKET !!!", resp_msg->hdr.req_id);
         #endif
-
-        const __u32 zero = 0;
-        __u16* ctrl_sk_port = bpf_map_lookup_elem(&map_gather_ctrl_port, &zero);
-        CHECK_MAP_LOOKUP(ctrl_sk_port, TC_ACT_SHOT);
         
         // Forward the final packet as usual, but mark it as cloned to avoid duplicate aggregation
         // Only do this if ALLOW_PK was set (otherwise we don't care about the packet)    
@@ -438,9 +426,37 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         // Note: spinlock not needed for reading the aggregated data because 
         // at this point, any redundant packet trying to update the aggregated 
         // response is dropped before executing the aggregation logic
-        bpf_skb_store_bytes(skb, SG_MSG_BODY_OFF, (char*)agg_entry->data, sizeof(RESP_VECTOR_TYPE) * RESP_MAX_VECTOR_SIZE, 0);
-        bpf_skb_store_bytes(skb, UDP_DEST_OFF, ctrl_sk_port, sizeof(*ctrl_sk_port), BPF_F_RECOMPUTE_CSUM);
+        
+
+        const __u32 zero = 0;
+        struct ctrl_sk_info* ctrl_sk = bpf_map_lookup_elem(&map_gather_ctrl_port, &zero);
+        CHECK_MAP_LOOKUP(ctrl_sk, TC_ACT_SHOT);
+
+        if (!ctrl_sk->useRingBuf) {
+            // Notify ctrl sock by writing the aggregated value via packet
+            __u16 ctrl_sk_port = ctrl_sk->port;
+            bpf_skb_store_bytes(skb, SG_MSG_BODY_OFF, (char*)agg_entry->data, sizeof(RESP_VECTOR_TYPE) * RESP_MAX_VECTOR_SIZE, 0);
+            bpf_skb_store_bytes(skb, UDP_DEST_OFF, &ctrl_sk_port, sizeof(__u16), BPF_F_RECOMPUTE_CSUM);
+            clear_vector(agg_entry->data);
+            return TC_ACT_OK;
+        }
+
+        // Otherwise, notify ctrl sock by writing the aggregated value to the epoll ringbuf
+        // Only reached if CtrlSockMode::Epoll is set in sgbpf::Service instance
+        sg_msg_t* rb_data = bpf_ringbuf_reserve(&map_ctrl_sk_ringbuf, sizeof(sg_msg_t), 0);
+        if (!rb_data)
+            return TC_ACT_SHOT;
+        
+        // copy the request ID and the aggregated data into the ring buffer
+        rb_data->hdr.req_id = req_id_copy; // don't care about rest of header
+        #pragma clang loop unroll(full)
+        for (__u32 i = 0; i < RESP_MAX_VECTOR_SIZE; ++i) {
+            ((uint32_t*)rb_data->body)[i] = ((uint32_t*)agg_entry->data)[i];
+        }
+
+        bpf_ringbuf_submit(rb_data, 0);
         clear_vector(agg_entry->data);
+        return TC_ACT_SHOT; // drop the final packet, as it is read via ringbuf
     }
 
     return TC_ACT_OK;

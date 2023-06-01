@@ -2,7 +2,7 @@
 CC = g++
 CFLAGS = -std=c++17 -g -O2 -Wall
 
-all: sgbpf_default sgbpf_ringbuf sgbpf_iouring sgbpf_user_agg naive event async async_busy_wait
+all: sgbpf_default sgbpf_ringbuf sgbpf_iouring sgbpf_user_agg naive event async async_busy_wait async_reqbufs
 
 ###################### BASELINE BENCHMARKS ####################
 
@@ -13,6 +13,9 @@ event: event_sg.cpp
 	$(CC) $(CFLAGS) $^ -o $@
 
 async: async_sg.cpp
+	$(CC) $(CFLAGS) $^ -o $@ -luring
+
+async_reqbufs: async_sg_reqbufs.cpp
 	$(CC) $(CFLAGS) $^ -o $@ -luring
 
 async_busy_wait: async_sg.cpp

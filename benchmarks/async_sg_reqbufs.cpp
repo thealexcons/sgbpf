@@ -8,126 +8,39 @@
 #include <thread>
 #include <fcntl.h>
 #include <liburing.h>
-#include <sys/mman.h>
+
 #include "common.h"
-#include <stack>
-#include <memory>
-#include <list>
 
-template <size_t BlockSize, size_t ReservedBlocks = 0>
-class Pool {
-private:
-    size_t size_;
-    std::stack<void *> addrs_;
-    std::stack<std::unique_ptr<uint8_t[]>> blocks_;
+inline uint32_t getRequestMapIdx(uint32_t reqID) {
+    return reqID & (8192 - 1);
+}
 
-public:
-    explicit Pool(size_t size) : size_(size) {
-        for (size_t i = 0; i < ReservedBlocks; i++) {
-            add_more_addresses();
-        }
+
+struct Request {
+    char* d_buffers; 
+    uint32_t d_reqId;   
+    bool d_active = false;
+
+    Request(uint32_t reqId, uint32_t pks) {
+        d_buffers = new char[pks * sizeof(sg_msg_t)];
+        d_reqId = reqId;
+        d_active = true;
     }
 
-    void* allocate() {
-        if (addrs_.empty()) {
-            add_more_addresses();
-        }
+    Request() = default;
 
-        auto ptr = addrs_.top();
-        addrs_.pop();
-        return ptr;
-    }
-
-    void deallocate(void *ptr) {
-        addrs_.push(ptr);
-    }
-
-    /* Rebind should only be called by STL containers when they need to create
-       an allocator for an internal node-like structure from the value_type allocator.
-       This means that the original allocator must not have been used yet, so we
-       are free to reassign the size_ field safely. */
-    void rebind(size_t size) {
-        if (!(addrs_.empty() && blocks_.empty())) {
-            std::cerr << "Cannot call Pool::rebind() after an allocation\n";
-            abort();
-        }
-
-        size_ = size;
-    }
-
-private:
-    // Refill the address stack by allocating another block of memory
-    void add_more_addresses() {
-        auto block = std::make_unique<uint8_t[]>(BlockSize);
-        auto total_size = BlockSize % size_ == 0 ? BlockSize : BlockSize - size_;
-
-        // Divide the allocated block into chunks of size_ bytes, and add their address
-        for (size_t i = 0; i < total_size; i += size_) {
-            addrs_.push(&block.get()[i]);
-        }
-
-        // Keep the memory of the block alive by adding it to our stack
-        blocks_.push(std::move(block));
+    ~Request() {
+        delete[] d_buffers;
     }
 };
-
-template <typename T, size_t BlockSize = 4096, size_t ReservedBlocks = 0>
-class PoolAllocator {
-private:
-    using PoolType = Pool<BlockSize, ReservedBlocks>;
-    std::shared_ptr<PoolType> pool_;
-
-public:
-    using value_type = T;
-    using is_always_equal = std::false_type;
-
-    PoolAllocator() : pool_(std::make_shared<PoolType>(sizeof(T))) {}
-
-    // Rebind copy constructor
-    template <typename U>
-    PoolAllocator(const PoolAllocator<U>& other) : pool_{other.pool_} {
-        pool_->rebind(sizeof(T));
-    }
-
-    template <typename U>
-    struct rebind {
-        using other = PoolAllocator<U, BlockSize, ReservedBlocks>;
-    };
-
-    PoolAllocator(const PoolAllocator& other) = default;
-    PoolAllocator(PoolAllocator&& other) = default;
-    PoolAllocator& operator=(const PoolAllocator& other) = default;
-    PoolAllocator& operator=(PoolAllocator&& other) = default;
-
-    T* allocate(size_t n) {
-        if (n > 1) {
-            // For n > 1, resort to using malloc
-            return static_cast<T*>(malloc(sizeof(T) * n));
-        }
-
-        return static_cast<T*>(pool_->allocate());
-    }
-
-    void deallocate(T* ptr, size_t n) {
-        if (n > 1) {
-            free(ptr);
-            return;
-        }
-
-        pool_->deallocate(ptr);
-    }
-};
-
-
-
 
 
 class ScatterGatherService {
 
     typedef struct __attribute__((packed)) conn_info  {
-        int      fd;
+        int      reqID;
         uint16_t type;
-        uint16_t bgid;
+        uint16_t idx;
     } conn_info_t;
 
     std::vector<Worker>&       d_workers;
@@ -137,20 +50,21 @@ class ScatterGatherService {
     uint16_t                   d_bgid = 42;
     // char*                      d_buffers;
     int                        d_skFd;
-    size_t                     d_numSkReads;
-    std::vector<char*>         d_packetBufferPool;
+    Request*                   d_requests;
+    // size_t                     d_numSkReads;
+    // std::vector<char*>         d_packetBufferPool;
     constexpr static const int NUM_BUFFERS = std::numeric_limits<uint16_t>::max(); // for fair comparison with sgbpf
-    PoolAllocator<char, NUM_BUFFERS*sizeof(sg_msg_t)> d_poolAllocator;
 
     constexpr static uint16_t READ_OP = 0x12;
 
 public:
     ScatterGatherService(std::vector<Worker>& workers)
         : d_workers{workers}
-        , d_numSkReads{0}
     {
         std::cout << "Workers loaded: " << workers.size() << std::endl;
         increaseMaxNumFiles();
+
+        d_requests = new Request[8192];
 
         d_skFd = socket(AF_INET, SOCK_DGRAM, 0);
 
@@ -164,43 +78,7 @@ public:
             throw std::runtime_error{"Failed to initialise io_uring queue"};
 
         // Preallocate and register buffers to receive the packets in
-        provideBuffers(true);
-    }
-
-    uint16_t provideBuffers(bool immediate = false) {
-        // Register packet buffers for buffer selection
-        #ifdef HUGE_PAGE_ALLOCATOR
-            void* buffer = nullptr;
-            auto alloc_size = NUM_BUFFERS * sizeof(sg_msg_t);
-            if (posix_memalign(&buffer, 1 << 21, alloc_size) != 0) {
-                throw std::bad_alloc();
-            }
-            
-            madvise(buffer, alloc_size, MADV_HUGEPAGE);
-            if (buffer == nullptr) {
-                throw std::bad_alloc();
-            }
-        #else
-            char* buffer  = new char[NUM_BUFFERS * sizeof(sg_msg_t)];
-        #endif
-        d_packetBufferPool.push_back(static_cast<char*>(buffer));
-
-        // std::cout << "[DEBUG] Providing buffers to the kernel (new bgid = "
-        //         << d_packetBufferPool.size() - 1 << ") num reads = " << d_numSkReads << std::endl;
-
-        auto bgid = d_packetBufferPool.size() - 1;  // the idx of the buffer in the pool
-        io_uring_sqe* sqe = io_uring_get_sqe(&d_ring);
-        io_uring_prep_provide_buffers(sqe, buffer, sizeof(sg_msg_t), NUM_BUFFERS, bgid, 0);
-
-        if (immediate) {
-            io_uring_submit(&d_ring);
-            io_uring_cqe* cqe;
-            io_uring_wait_cqe(&d_ring, &cqe);
-            if (cqe->res < 0)
-                throw std::runtime_error{"Failed to provide io_uring buffers to the kernel"};
-            io_uring_cqe_seen(&d_ring, cqe);
-        }
-        return bgid;
+        // provideBuffers(true);
     }
 
     ~ScatterGatherService() {
@@ -209,8 +87,9 @@ public:
 
     void scatter(const char* msg, size_t len) {
         // prepare a dummy sg_msg_t to send
+        int reqID = d_nextRequest++;
         sg_msg_t scatter_msg;
-        scatter_msg.hdr.req_id = d_nextRequest++;
+        scatter_msg.hdr.req_id = reqID;
         scatter_msg.hdr.seq_num = 0;
         scatter_msg.hdr.num_pks = 1; 
         scatter_msg.hdr.body_len = std::min(len, BODY_LEN);
@@ -223,7 +102,13 @@ public:
             .iov_len = sizeof(sg_msg_t),
         };
 
-        uint16_t bgid = d_packetBufferPool.size() - 1; // use the most recent bgid
+        auto idx = getRequestMapIdx(scatter_msg.hdr.req_id);
+        if (d_requests[idx].d_active) {
+            d_requests[idx].~Request(); // explicitly free resources
+        }
+        Request* req = new (d_requests + idx) Request{reqID, d_workers.size()};
+
+
         for (auto i = 0u; i < d_workers.size(); ++i) {
             auto& worker = d_workers[i];
             memset(&d_msgHdrs[i], 0, sizeof(msghdr));
@@ -238,19 +123,14 @@ public:
             io_uring_sqe_set_flags(sqe, 0);
 
             // Add read
-            if (d_numSkReads == NUM_BUFFERS) {
-                bgid = provideBuffers();
-                d_numSkReads = 0;
-            }
-            d_numSkReads++;
             sqe = io_uring_get_sqe(&d_ring);
-            io_uring_prep_recv(sqe, worker.socketFd(), NULL, sizeof(sg_msg_t), 0);
-            io_uring_sqe_set_flags(sqe, IOSQE_BUFFER_SELECT);
-            sqe->buf_group = bgid;
+            io_uring_prep_recv(sqe, worker.socketFd(), req->d_buffers + i * sizeof(sg_msg_t), sizeof(sg_msg_t), 0);
+            // io_uring_sqe_set_flags(sqe, IOSQE_BUFFER_SELECT);
+            // sqe->buf_group = bgid;
             conn_info_t conn_i = {
-                .fd = worker.socketFd(),
+                .reqID = reqID,
                 .type = READ_OP,
-                .bgid = bgid,
+                .idx = i,
             };
             memcpy(&sqe->user_data, &conn_i, sizeof(conn_info_t));
         }
@@ -275,9 +155,13 @@ public:
                 ++count;
                 const auto conn_i = reinterpret_cast<conn_info_t*>(&cqe->user_data);
                 if (conn_i->type == READ_OP) {
-                    auto bgid = conn_i->bgid;
-                    auto bid = cqe->flags >> IORING_CQE_BUFFER_SHIFT;
-                    auto resp = (sg_msg_t*) (d_packetBufferPool[bgid] + bid * sizeof(sg_msg_t));
+                    auto idx = conn_i->idx;
+                    auto reqID = conn_i->reqID;
+                    if (!d_requests[getRequestMapIdx(reqID)].d_active)
+                        continue;
+                    // auto bgid = conn_i->bgid;
+                    // auto bid = cqe->flags >> IORING_CQE_BUFFER_SHIFT;
+                    auto resp = (sg_msg_t*) (d_requests[getRequestMapIdx(reqID)].d_buffers + idx * sizeof(sg_msg_t));
 
                     // Aggregation logic:
                     auto numElems = resp->hdr.body_len / sizeof(DATA_TYPE);
@@ -340,6 +224,7 @@ void throughput_benchmark(int numRequests) {
         }
     }
     std::cout << "!!!!!!! Average throughput = " << BenchmarkTimer::avgTime(throughputValues) << " req/s" << std::endl;
+
 }
 
 void unloaded_latency_benchmark(int numRequests) {

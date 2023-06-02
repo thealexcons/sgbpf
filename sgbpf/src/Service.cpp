@@ -94,15 +94,14 @@ Service::Service(Context& ctx,
     if (d_workers.size() > MAX_SOCKETS_ALLOWED)
         throw std::invalid_argument{"Exceeded max number of workers allowed"};
 
-    // d_activeRequests.reserve(MAX_ACTIVE_REQUESTS_ALLOWED);
     d_activeRequests = new Request[MAX_ACTIVE_REQUESTS_ALLOWED];
 
-    // Provide an initial buffer for packets
-    provideBuffers(true);
+    // Provide an initial buffer for packets if allowed through to userspace
+    if (d_packetAction == PacketAction::Allow)
+        provideBuffers(true);
 
     // Prepare epoll-based method for ringbuf
     if (d_ctrlSockMode == CtrlSockMode::Epoll) {
-        // d_ctrlSkRingBuf = ring_buffer__new(d_ctx.ctrlSkRingBufMap().fd(), handleRingBufEpollEvent, &d_notificationRingBufCallback, NULL);
         d_ctrlSkRingBuf = ring_buffer__new(d_ctx.ctrlSkRingBufMap().fd(), handleRingBufEpollEvent, this, NULL);
     }
 
@@ -251,7 +250,8 @@ Request* Service::scatter(const char* msg, size_t len, ReqParams params)
         }
     }
 
-    if (d_ctrlSockMode == CtrlSockMode::Block) {
+    // Add a read op for the control socket
+    if (d_ctrlSockMode == CtrlSockMode::Block || d_ctrlSockMode == CtrlSockMode::BusyWait) {
         io_uring_sqe *sqe = io_uring_get_sqe(&d_ioCtx.ring);
         io_uring_prep_recv(sqe, d_ctrlSkFd, &req->d_ctrlSkBuf, Request::MaxBufferSize, 0);
         io_uring_sqe_set_flags(sqe, 0);
@@ -263,10 +263,13 @@ Request* Service::scatter(const char* msg, size_t len, ReqParams params)
         *reqIdField = reqId; 
         memcpy(&sqe->user_data, &conn_i, sizeof(conn_info_t));
 
-        auto waitFor = 2 + allowPks * d_workers.size() * params.numPksPerRespMsg;
-        req->startTimer();
-        io_uring_submit_and_wait(&d_ioCtx.ring, waitFor);
-        return req;
+        // Perform a blocking submission until the request has completed
+        if (d_ctrlSockMode == CtrlSockMode::Block) {
+            auto waitFor = 2 + allowPks * d_workers.size() * params.numPksPerRespMsg;
+            req->startTimer();
+            io_uring_submit_and_wait(&d_ioCtx.ring, waitFor);
+            return req;
+        }
     }
 
     io_uring_submit(&d_ioCtx.ring);
@@ -299,7 +302,8 @@ void Service::processPendingEvents(int requestID) {
         const auto conn_i = reinterpret_cast<conn_info_t*>(&cqe->user_data);
 
         // If this is a cqe for the ctrl sk, just continue
-        if (d_ctrlSockMode == CtrlSockMode::Block && conn_i->fd == d_ctrlSkFd) {
+        if ((d_ctrlSockMode == CtrlSockMode::Block || d_ctrlSockMode == CtrlSockMode::BusyWait) 
+            && conn_i->fd == d_ctrlSkFd) {
             const auto reqID = reinterpret_cast<uint32_t*>(((char*)conn_i) + sizeof(uint32_t));
             #ifdef DEBUG_PRINT
             std::cout << "got control socket cqe for reqID " << *reqID << std::endl; 
@@ -434,13 +438,21 @@ void Service::freeRequest(Request* req, bool immediate) {
 
 uint16_t Service::provideBuffers(bool immediate) {
     // Register packet buffers for buffer selection
-    char* buffer  = new char[NUM_BUFFERS * Request::MaxBufferSize];
-    d_packetBufferPool.push_back(buffer);
+    constexpr static auto HUGE_PAGE_SIZE = 1 << 21;
+    void* buffer = nullptr;
+    auto alloc_size = NUM_BUFFERS * sizeof(sg_msg_t);
+    if (posix_memalign(&buffer, HUGE_PAGE_SIZE, alloc_size) != 0) {
+        throw std::runtime_error{"Failed to allocate memory for packet buffers"};
+    }    
+    madvise(buffer, alloc_size, MADV_HUGEPAGE);
+
+    d_packetBufferPool.push_back(static_cast<char*>(buffer));
 
     #ifdef DEBUG_PRINT
     std::cout << "[DEBUG] Providing buffers to the kernel (new bgid = "
               << d_packetBufferPool.size() - 1 << ") num reads = " << d_numSkReads << std::endl;
     #endif
+
     auto bgid = d_packetBufferPool.size() - 1;  // the idx of the buffer in the pool
     io_uring_sqe* sqe = io_uring_get_sqe(&d_ioCtx.ring);
     io_uring_prep_provide_buffers(sqe, buffer, Request::MaxBufferSize, NUM_BUFFERS, bgid, 0);

@@ -48,6 +48,7 @@ enum class CtrlSockMode
 {
     DefaultUnix,    // use as a raw Unix file descriptor
     Block,          // use io_uring + buffer, blocks until ctrl sk is ready
+    BusyWait,       // use io_uring + buffer, user must busy wait on Request::isReady()
     Epoll           // use epoll notification-based polling with callback
 };
 
@@ -118,13 +119,15 @@ public:
 
     inline const std::vector<Worker>& workers() const { return *d_workers; }
 
-    // Only makes sense if CtrlSockMode::Block is set or if PacketAction::Allow is set
-    inline bool isReady(bool ctrlSockOnly = false) const { 
-        if (d_ctrlSockMode == CtrlSockMode::Block)
-            return ctrlSockOnly ? d_ctrlSockReady : d_ctrlSockReady && d_status == Status::Ready;
+    // Only makes sense if CtrlSockMode::{Block, BusyWait} are set or if PacketAction::Allow is set
+    inline bool isReady(bool waitForCtrlSockOnly = false) const { 
+        if (d_ctrlSockMode == CtrlSockMode::Block || d_ctrlSockMode == CtrlSockMode::BusyWait)
+            return waitForCtrlSockOnly ? d_ctrlSockReady : d_ctrlSockReady && d_status == Status::Ready;
 
         return d_status == Status::Ready;
     }
+
+    inline const sg_msg_t* ctrlSockData() const { return &d_ctrlSkBuf; }
 
     inline bool isExpired() const { return d_status == Status::TimedOut; }
 
@@ -136,9 +139,6 @@ public:
         return ((*d_packetBufferPool)[packetPtr.bgid] + packetPtr.bid * Request::MaxBufferSize);
     }
 
-    // Methods below are only relevant if CtrlSockMode::Block is set
-
-    inline const sg_msg_t* ctrlSockData() const { return &d_ctrlSkBuf; }
 
 protected:
     bool hasTimedOut() const;

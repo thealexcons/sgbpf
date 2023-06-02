@@ -61,6 +61,9 @@ sgbpf_iouring: sgbpf_iouring.cpp
 sgbpf_ringbuf: sgbpf_ringbuf.cpp
 	$(CC) $(CFLAGS) $(INC) $^ -o $@ $(LDFLAGS)
 
+sgbpf_busy_wait: sgbpf_busy_wait.cpp
+	$(CC) $(CFLAGS) $(INC) $^ -o $@ $(LDFLAGS)
+
 sgbpf_user_agg: sgbpf_user_aggregation.cpp
 	$(CC) $(CFLAGS) $(INC) $^ -o $@ $(LDFLAGS)
 

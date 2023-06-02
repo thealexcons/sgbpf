@@ -81,7 +81,7 @@ void throughput_benchmark(int numRequests, sgbpf::Context& ctx) {
         ctx, 
         workers, 
         sgbpf::PacketAction::Discard,
-        sgbpf::CtrlSockMode::DefaultUnix
+        sgbpf::CtrlSockMode::BusyWait
     };
     
     auto totalGathers = 0;
@@ -95,23 +95,31 @@ void throughput_benchmark(int numRequests, sgbpf::Context& ctx) {
     std::vector<uint64_t> throughputValues;
 
     auto outstandingReqs = 32;
+    std::deque<sgbpf::Request*> reqs;
     for (auto i = 0; i < outstandingReqs; i++) {
-        service.scatter("SCATTER", 8);
+        reqs.push_back(service.scatter("SCATTER", 8));
     }
-    sg_msg_t buf;
+
     auto gatherCount = 0;
     auto start = std::chrono::high_resolution_clock::now();
     while (totalGathers < numRequests) {
-        // wait for gather to complete
-        auto b = read(service.ctrlSkFd(), &buf, sizeof(sg_msg_t));
-        assert(b == sizeof(sg_msg_t));
-        service.processEvents();    // DISCARD_PK enabled, so this should be negligible
-
-        gatherCount++;
-        totalGathers++;
+        // wait for one gather to complete
+        while (1) {
+            service.processEvents();
+            for (auto it=reqs.begin(); it!=reqs.end(); ++it) {
+                auto req = *it;
+                if (req->isReady(true)) {
+                    gatherCount++;
+                    totalGathers++;
+                    reqs.erase(it);
+                    break;
+                }
+            }
+        }
 
         // send out another scatter
-        service.scatter("SCATTER", 8);
+        auto nextReq = service.scatter("SCATTER", 8);
+        reqs.push_back(nextReq);
 
         if (gatherCount == throughputCalculationRate) {
             auto end_time = std::chrono::high_resolution_clock::now();
@@ -136,19 +144,19 @@ void unloaded_latency_benchmark(int numRequests, sgbpf::Context& ctx) {
         ctx, 
         workers, 
         sgbpf::PacketAction::Discard,
-        sgbpf::CtrlSockMode::DefaultUnix
+        sgbpf::CtrlSockMode::BusyWait
     };
 
-    sg_msg_t buf;
     std::vector<uint64_t> times;
     times.reserve(numRequests);
     for (auto i = 0; i < numRequests; ++i) {
         BenchmarkTimer timer{times};
+
         auto req = service.scatter("SCATTER", 8);
- 
-        auto b = read(service.ctrlSkFd(), &buf, sizeof(sg_msg_t));
-        assert(b == sizeof(sg_msg_t));
-        service.processEvents(req->id());
+
+        while (!req->isReady(true)) {
+           service.processEvents(req->id());
+        }
     }
 
     std::cout << "Avg unloaded latency: " << BenchmarkTimer::avgTime(times) << " us\n";

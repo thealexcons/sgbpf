@@ -104,7 +104,8 @@ void throughput_benchmark(int numRequests, sgbpf::Context& ctx) {
     auto start = std::chrono::high_resolution_clock::now();
     while (totalGathers < numRequests) {
         // wait for one gather to complete
-        while (1) {
+        bool completedOne = false;
+        while (!completedOne) {
             service.processEvents();
             for (auto it=reqs.begin(); it!=reqs.end(); ++it) {
                 auto req = *it;
@@ -112,6 +113,7 @@ void throughput_benchmark(int numRequests, sgbpf::Context& ctx) {
                     gatherCount++;
                     totalGathers++;
                     reqs.erase(it);
+                    completedOne = true;
                     break;
                 }
             }

@@ -2,7 +2,7 @@
 CC = g++
 CFLAGS = -std=c++17 -g -O2 -Wall
 
-all: sgbpf_default sgbpf_ringbuf sgbpf_iouring sgbpf_user_agg naive event async async_busy_wait async_reqbufs
+all: sgbpf_default sgbpf_ringbuf sgbpf_iouring sgbpf_busy_wait sgbpf_user_agg naive event async async_busy_wait async_reqbufs
 
 ###################### BASELINE BENCHMARKS ####################
 

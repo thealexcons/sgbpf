@@ -122,7 +122,8 @@ void throughput_benchmark(int numRequests, sgbpf::Context& ctx) {
             auto elapsed_time = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start);
             auto tput = gatherCount / static_cast<double>(elapsed_time.count()) * 1000000;
             throughputValues.push_back(tput);
-            std::cout << "Throughput: " << tput << " req/s (" << totalGathers << " ops completed)\n" ;
+            // std::cout << "Throughput: " << tput << " req/s (" << totalGathers << " ops completed)\n" ;
+            std::cout << tput << "\n" ;
             gatherCount = 0;
             start = std::chrono::high_resolution_clock::now();
         }

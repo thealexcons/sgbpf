@@ -156,6 +156,61 @@ void unloaded_latency_benchmark(int numRequests, sgbpf::Context& ctx) {
     std::cout << "Std dev unloaded latency: " << BenchmarkTimer::stdDev(times) << " us\n";
 }
 
+// void xput_latency_benchmark(int numRequests, sgbpf::Context& ctx) {
+//     std::cout << "Running throughput-latency experiment" << std::endl;
+
+//     auto workers = sgbpf::Worker::fromFile("workers.cfg");
+//     std::cout << "Workers loaded: " << workers.size() << std::endl;
+//     sgbpf::Service service{
+//         ctx, 
+//         workers, 
+//         sgbpf::PacketAction::Discard,
+//         sgbpf::CtrlSockMode::DefaultUnix
+//     };
+
+//     // int completedRequests = 0;
+
+//     std::vector<uint64_t> latencies;
+//     std::vector<uint64_t> throughputs;
+//     latencies.reserve(numRequests);
+//     throughputs.reserve(numRequests);
+
+//     sg_msg_t buf;
+//     // auto start = std::chrono::high_resolution_clock::now();
+//     for (auto i = 0; i < numRequests; ++i) {
+//         // BenchmarkTimer timer{latencies};
+//         auto start_req = std::chrono::high_resolution_clock::now();
+
+//         auto req = service.scatter("SCATTER", 8);
+//         auto b = read(service.ctrlSkFd(), &buf, sizeof(sg_msg_t));
+//         assert(b == sizeof(sg_msg_t));
+//         service.processEvents(req->id());
+//         auto end_req = std::chrono::high_resolution_clock::now();
+//         auto elapsed_time_req = std::chrono::duration_cast<std::chrono::microseconds>(end_req - start_req);
+//         latencies.push_back(elapsed_time_req.count());
+
+//         auto tput = 1 / static_cast<double>(elapsed_time_req.count()) * 1000000;
+//         throughputs.push_back(tput);
+//         // std::cout << tput << std::endl;
+//     }
+//     // auto end = std::chrono::high_resolution_clock::now();
+//     // auto elapsed_time = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+
+//     std::cout << "Avg latency: " << BenchmarkTimer::avgTime(latencies) << " us\n";
+//     std::cout << "Avg throughput: " << BenchmarkTimer::avgTime(throughputs) << " us\n";
+
+//     std::cout << "[";
+//     for (const auto l : latencies) {
+//         std::cout << l << ", ";
+//     }
+//     std::cout << "]\n";
+//     for (const auto t : throughputs) {
+//         std::cout << t << ", ";
+//     }
+//     std::cout << "]\n";
+// }
+
+
 
 int main(int argc, char** argv) {
 

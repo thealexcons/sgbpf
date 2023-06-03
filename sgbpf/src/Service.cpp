@@ -96,34 +96,40 @@ Service::Service(Context& ctx,
 
     d_activeRequests = new Request[MAX_ACTIVE_REQUESTS_ALLOWED];
 
-    // Provide an initial buffer for packets if allowed through to userspace
-    if (d_packetAction == PacketAction::Allow)
+    const bool allowPackets = d_packetAction == PacketAction::Allow;
+
+    // Provide an initial buffer for packets
+    if (allowPackets)
         provideBuffers(true);
 
     // Prepare epoll-based method for ringbuf
-    if (d_ctrlSockMode == CtrlSockMode::Epoll) {
+    if (d_ctrlSockMode == CtrlSockMode::Epoll)
         d_ctrlSkRingBuf = ring_buffer__new(d_ctx.ctrlSkRingBufMap().fd(), handleRingBufEpollEvent, this, NULL);
-    }
 
     // Configure the worker sockets
-    int workerFds[MAX_SOCKETS_ALLOWED];
+    int numSocks = allowPackets ? d_workers.size() + 2 : 2;
+    auto sockFds = (int*) malloc(numSocks * sizeof(int));
     for (auto i = 0u; i < d_workers.size(); ++i) {
-        const auto [ workerSkFd, workerLocalPort ] = openWorkerSocket();
-        d_workers[i].setSocketFd(workerSkFd);
-        workerFds[i] = workerSkFd;
-        
+        uint16_t workerPort = htons(11111); // use any default port number
+        if (allowPackets) {
+            const auto [ workerSkFd, workerLocalPort ] = openWorkerSocket();
+            workerPort = workerLocalPort;
+            d_workers[i].setSocketFd(workerSkFd);
+            sockFds[i] = workerSkFd;
+        }
+
         worker_info_t wi = {
             .worker_ip = d_workers[i].ipAddressNet(),
             .worker_port = d_workers[i].portNet(),
-            .app_port = workerLocalPort,
+            .app_port = workerPort,
         };
         d_ctx.workersMap().update(&i, &wi);
 
         const worker_resp_status_t resp_status = WAITING_FOR_RESPONSE;
         d_ctx.workersHashMap().update(&wi, &resp_status);
     }
-    io_uring_register_files(&d_ioCtx.ring, workerFds, d_workers.size());
-    
+
+
     // Configure the gather-control socket
     d_ctrlSkFd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);  
     if (d_ctrlSkFd < 0)
@@ -154,6 +160,12 @@ Service::Service(Context& ctx,
         throw std::runtime_error{"Failed bind() on scatter socket"};
 
     d_ctx.setScatterPort(PORT);
+
+    // Register the socket file descriptors with io_uring for efficient access
+    sockFds[numSocks - 2] = d_ctrlSkFd;
+    sockFds[numSocks - 1] = d_scatterSkFd;
+    io_uring_register_files(&d_ioCtx.ring, sockFds, numSocks);
+    free(sockFds);
 }
 
 Service::~Service()

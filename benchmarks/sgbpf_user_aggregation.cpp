@@ -147,7 +147,7 @@ void unloaded_latency_benchmark(int numRequests, sgbpf::Context& ctx) {
 
     auto workers = sgbpf::Worker::fromFile("workers.cfg");
     std::cout << "Workers loaded: " << workers.size() << std::endl;
-       sgbpf::Service service{
+    sgbpf::Service service{
         ctx, 
         workers, 
         sgbpf::PacketAction::Allow,
@@ -170,7 +170,10 @@ void unloaded_latency_benchmark(int numRequests, sgbpf::Context& ctx) {
         auto b = read(service.ctrlSkFd(), &buf, sizeof(sg_msg_t));
         assert(b == sizeof(sg_msg_t));
 
-        service.processEvents(req->id());
+        // should be ready, but check just in case ctrl sk data "beats" worker sk data in kernel stack
+        while (!req->isReady()) {
+            service.processEvents(req->id());
+        }
         for (auto [wfd, ptrs] : req->bufferPointers()) {
             assert(ptrs.size() == 1);
             auto ptr = ptrs[0];

@@ -84,7 +84,7 @@ Service::Service(Context& ctx,
                  const std::vector<Worker>& workers,
                  PacketAction packetAction,
                  CtrlSockMode ctrlSockMode,
-                 bool enableAllGatherMode) 
+                 bool enableAllGatherBroadcast) 
     : d_ctx{ctx}
     , d_workers{workers}
     , d_ioCtx{(uint32_t) d_workers.size() * 4}
@@ -148,7 +148,7 @@ Service::Service(Context& ctx,
     d_ctx.setGatherControlPort(
         ctrlPort, 
         d_ctrlSockMode == CtrlSockMode::Epoll,  // use ringbuf to deliver data to application
-        enableAllGatherMode
+        enableAllGatherBroadcast                // if enabled, perform a broadcast of the final data
     );
 
 

@@ -49,7 +49,7 @@ public:
             const std::vector<Worker>& workers,
             PacketAction packetAction,
             CtrlSockMode ctrlSockMode = CtrlSockMode::DefaultUnix,
-            bool enableAllGatherMode = false);
+            bool enableAllGatherBroadcast = false);
 
     ~Service();
 

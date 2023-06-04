@@ -56,7 +56,7 @@ public:
     ~Context();
 
     void setScatterPort(uint16_t port);
-    void setGatherControlPort(uint16_t port, bool useRingBufNotifs);
+    void setGatherControlPort(uint16_t port, bool useRingBufNotifs, bool enableAllGather);
 
     ebpf::Map& workersMap() { return d_workersMap; };
     ebpf::Map& workersHashMap() { return d_workersHashMap; };

@@ -48,7 +48,8 @@ public:
     Service(Context& ctx,
             const std::vector<Worker>& workers,
             PacketAction packetAction,
-            CtrlSockMode ctrlSockMode = CtrlSockMode::DefaultUnix);
+            CtrlSockMode ctrlSockMode = CtrlSockMode::DefaultUnix,
+            bool enableAllGatherMode = false);
 
     ~Service();
 

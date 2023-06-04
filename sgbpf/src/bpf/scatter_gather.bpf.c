@@ -19,6 +19,7 @@
 #define UDP_DEST_OFF (ETH_HLEN + sizeof(struct iphdr) + offsetof(struct udphdr, dest))
 #define UDP_SRC_OFF (ETH_HLEN + sizeof(struct iphdr) + offsetof(struct udphdr, source))
 #define SG_MSG_FLAGS_OFF (ETH_HLEN + sizeof(struct iphdr) + sizeof(struct udphdr) + offsetof(sg_msg_t, hdr) + offsetof(struct sg_msg_hdr, flags))
+#define SG_MSG_MSGTYPE_OFF (ETH_HLEN + sizeof(struct iphdr) + sizeof(struct udphdr) + offsetof(sg_msg_t, hdr) + offsetof(struct sg_msg_hdr, msg_type))
 #define SG_MSG_BODY_OFF (ETH_HLEN + sizeof(struct iphdr) + sizeof(struct udphdr) + offsetof(sg_msg_t, body))
 
 /**************************** HELPER FUNCTIONS ********************************/
@@ -410,7 +411,7 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         // Forward the final packet as usual, but mark it as cloned to avoid duplicate aggregation
         // Only do this if ALLOW_PK was set (otherwise we don't care about the packet)    
         if (completed_allow_pk) {
-            const unsigned char cloned_flag = SG_MSG_F_LAST_CLONED;
+            static const unsigned char cloned_flag = SG_MSG_F_LAST_CLONED;
             bpf_skb_store_bytes(skb, SG_MSG_FLAGS_OFF, &cloned_flag, sizeof(unsigned char), BPF_F_RECOMPUTE_CSUM);
             bpf_clone_redirect(skb, skb->ifindex, 0);
         }
@@ -427,16 +428,33 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
         // at this point, any redundant packet trying to update the aggregated 
         // response is dropped before executing the aggregation logic
         
-
         const __u32 zero = 0;
         struct ctrl_sk_info* ctrl_sk = bpf_map_lookup_elem(&map_gather_ctrl_port, &zero);
         CHECK_MAP_LOOKUP(ctrl_sk, TC_ACT_SHOT);
 
-        if (!ctrl_sk->useRingBuf) {
+        // Perform all-gather broadcast with final result
+        if (ctrl_sk->all_gather) {
+            static const unsigned char all_gather_msg_type = ALL_GATHER_MSG;
+            bpf_skb_store_bytes(skb, SG_MSG_BODY_OFF, (char*)agg_entry->data, sizeof(RESP_VECTOR_TYPE) * RESP_MAX_VECTOR_SIZE, 0);
+            bpf_skb_store_bytes(skb, SG_MSG_MSGTYPE_OFF, &all_gather_msg_type, sizeof(unsigned char), 0);
+            struct send_worker_ctx send_worker_ctx_data = {
+                .skb = skb,
+            };
+            bpf_for_each_map_elem(&map_workers, send_worker, &send_worker_ctx_data, 0);
+
+            // Reset the destination IP address to localhost to receive the data on the ctrl socket
+            static const __u32 LOCALHOST_IP = bpf_htonl(0x7F000001);
+            bpf_skb_store_bytes(skb, IP_DEST_OFF, &LOCALHOST_IP, sizeof(__u32), 0);
+        }
+
+        if (!ctrl_sk->use_ring_buf) {
             // Notify ctrl sock by writing the aggregated value via packet
             __u16 ctrl_sk_port = ctrl_sk->port;
-            bpf_skb_store_bytes(skb, SG_MSG_BODY_OFF, (char*)agg_entry->data, sizeof(RESP_VECTOR_TYPE) * RESP_MAX_VECTOR_SIZE, 0);
             bpf_skb_store_bytes(skb, UDP_DEST_OFF, &ctrl_sk_port, sizeof(__u16), BPF_F_RECOMPUTE_CSUM);
+
+            if (!ctrl_sk->all_gather)
+                bpf_skb_store_bytes(skb, SG_MSG_BODY_OFF, (char*)agg_entry->data, sizeof(RESP_VECTOR_TYPE) * RESP_MAX_VECTOR_SIZE, 0);
+
             clear_vector(agg_entry->data);
             return TC_ACT_OK;
         }

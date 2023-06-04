@@ -73,7 +73,8 @@ typedef struct __attribute__((packed)) {
 typedef enum msg_type 
 {
     SCATTER_MSG = 0,
-    GATHER_MSG
+    GATHER_MSG,
+    ALL_GATHER_MSG
 } msg_type_t;
 
 

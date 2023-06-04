@@ -83,7 +83,8 @@ int handleRingBufEpollEvent(void* ctx, void* data, size_t data_sz);
 Service::Service(Context& ctx, 
                  const std::vector<Worker>& workers,
                  PacketAction packetAction,
-                 CtrlSockMode ctrlSockMode) 
+                 CtrlSockMode ctrlSockMode,
+                 bool enableAllGatherMode) 
     : d_ctx{ctx}
     , d_workers{workers}
     , d_ioCtx{(uint32_t) d_workers.size() * 4}
@@ -144,7 +145,11 @@ Service::Service(Context& ctx,
     if ( bind(d_ctrlSkFd, (const struct sockaddr *) &ctrlSkAddr, sizeof(sockaddr_in)) < 0 )
         throw std::runtime_error{"Failed bind() on gather-control socket"};
 
-    d_ctx.setGatherControlPort(ctrlPort, d_ctrlSockMode == CtrlSockMode::Epoll);
+    d_ctx.setGatherControlPort(
+        ctrlPort, 
+        d_ctrlSockMode == CtrlSockMode::Epoll,  // use ringbuf to deliver data to application
+        enableAllGatherMode
+    );
 
 
     // Configure the scatter socket for sending

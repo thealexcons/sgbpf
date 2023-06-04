@@ -63,15 +63,17 @@ void Context::setScatterPort(uint16_t port)
     d_appPortMap.update(&ZERO, &portNetBytes);
 }
 
-void Context::setGatherControlPort(uint16_t port, bool useRingBufNotifs)
+void Context::setGatherControlPort(uint16_t port, bool useRingBufNotifs, bool enableAllGather)
 {
     // Register the control socket port for the gather stage
     struct ctrl_sk_info {
         __u16 port;
-        __u16 useRingBuf;
+        __u16 use_ring_buf;
+        __u8  all_gather;
     } data = {
         .port = htons(port),
-        .useRingBuf = (uint16_t)useRingBufNotifs,
+        .use_ring_buf = (uint16_t)useRingBufNotifs,
+        .all_gather = (uint8_t) enableAllGather,
     };
     d_gatherCtrlPortMap.update(&ZERO, &data);
 }

@@ -136,7 +136,8 @@ void unloaded_latency_benchmark(int numRequests, sgbpf::Context& ctx) {
         ctx, 
         workers, 
         sgbpf::PacketAction::Discard,
-        sgbpf::CtrlSockMode::DefaultUnix
+        sgbpf::CtrlSockMode::DefaultUnix,
+        true
     };
 
     sg_msg_t buf;

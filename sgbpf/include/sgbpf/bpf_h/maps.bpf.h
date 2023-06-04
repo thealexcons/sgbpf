@@ -31,7 +31,8 @@ struct {
 // Stores the application control port (for gathering)
 struct ctrl_sk_info {
     __u16 port;
-    __u16 useRingBuf;
+    __u16 use_ring_buf;
+    __u8  all_gather;
 };
 
 struct {

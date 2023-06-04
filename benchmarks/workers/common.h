@@ -87,7 +87,8 @@ enum
 typedef enum msg_type 
 {
     SCATTER_MSG = 0,
-    GATHER_MSG
+    GATHER_MSG,
+    ALL_GATHER_MSG
 } msg_type_t;
 
 #endif // COMMON_H

@@ -106,16 +106,22 @@ int main(int argc, char *argv[]) {
       }
       totalBytes += bytes;
 
-      // while ((bytes = recvfrom(sock, buf, sizeof(sg_msg_t), 0, (struct sockaddr *) &client, &clientSize)) > 0) {
       sg_msg_t* msg = (sg_msg_t*) buf;
       // printf("[WORKER %d] got req with ID %d (total bytes = %d)\n", worker_port, msg->hdr.req_id, totalBytes);
       // fflush(stdout);
+      if (msg->hdr.msg_type == ALL_GATHER_MSG) {
+          printf("[WORKER %d] got all gather response for req %d, data vector = \n", worker_port, msg->hdr.req_id);
+          for (int i = 0; i < RESP_MAX_VECTOR_SIZE; i++) {
+            printf("[WORKER %d]  vec[%d] = %d\n", worker_port, i, ((uint32_t*)msg->body)[i]);
+          }
+          fflush(stdout);
+      }
 
       // Vector example: send vector of increasing numbers
       sg_msg_t resp_msg;
       memset(&resp_msg, 0, sizeof(resp_msg));
       resp_msg.hdr.req_id = msg->hdr.req_id;
-      resp_msg.hdr.msg_type = 1;  // GATHER Msg
+      resp_msg.hdr.msg_type = GATHER_MSG;  // GATHER Msg
       resp_msg.hdr.body_len = sizeof(uint32_t) * RESP_MAX_VECTOR_SIZE;
       
       uint32_t vec[RESP_MAX_VECTOR_SIZE];

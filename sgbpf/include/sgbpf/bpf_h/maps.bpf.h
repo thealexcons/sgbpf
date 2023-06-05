@@ -40,6 +40,7 @@ struct {
     __type(key, __u32);
     __type(value, struct ctrl_sk_info);
     __uint(max_entries, 1);
+    __uint(pinning, LIBBPF_PIN_BY_NAME);
 } map_gather_ctrl_port SEC(".maps");
 
 
@@ -105,6 +106,7 @@ struct {
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
     __uint(max_entries, sizeof(sg_msg_t) * MAX_ACTIVE_REQUESTS_ALLOWED);
+    __uint(pinning, LIBBPF_PIN_BY_NAME);
 } map_ctrl_sk_ringbuf SEC(".maps");
 
 #endif // MAPS_BPF_H

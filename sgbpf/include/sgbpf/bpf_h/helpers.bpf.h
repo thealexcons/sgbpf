@@ -29,6 +29,35 @@
 #define ALLOW_PK 0      // Allow the individual packet through to user-space
 #define DISCARD_PK 1    // Discard the individual packet after aggregation
 
+static __always_inline void clear_vector(RESP_VECTOR_TYPE* agg_vector) {
+    // ebpf sets a maximum size for memset, so we need to "hack" around it
+    #define MAX_CONTIGUOUS_MEMSET_SIZE 256
+
+    #pragma clang loop unroll(full)
+    for (__u32 i = 0; i < RESP_MAX_VECTOR_SIZE; ++i) {
+        if (UNLIKELY( MOD_POW2(i, MAX_CONTIGUOUS_MEMSET_SIZE) == 0 )) {
+            asm volatile("" ::: "memory"); // dummy instruction needed to break the memset, need something cheap
+        }
+        agg_vector[i] = 0;
+    }
+}
+
+static __always_inline __s32 write_data_to_ringbuf(__u32 req_id, RESP_VECTOR_TYPE* current_value) {
+    sg_msg_t* rb_data = bpf_ringbuf_reserve(&map_ctrl_sk_ringbuf, sizeof(sg_msg_t), 0);
+    if (!rb_data)
+        return -1;
+    
+    // copy the request ID and the aggregated data into the ring buffer
+    rb_data->hdr.req_id = req_id;
+    #pragma clang loop unroll(full)
+    for (__u32 i = 0; i < RESP_MAX_VECTOR_SIZE; ++i) {
+        ((RESP_VECTOR_TYPE*) rb_data->body)[i] = current_value[i];
+    }
+
+    bpf_ringbuf_submit(rb_data, 0);
+    return 0;
+}
+
 static inline enum xdp_action parse_msg_xdp(struct xdp_md* ctx, sg_msg_t** msg) {
     void* data = (void *)(long)ctx->data;
     void* data_end = (void *)(long)ctx->data_end;
@@ -57,7 +86,7 @@ static inline enum xdp_action parse_msg_xdp(struct xdp_md* ctx, sg_msg_t** msg) 
     return XDP_PASS;
 }
 
-static __always_inline enum xdp_action post_aggregation_process(struct xdp_md* ctx, sg_msg_t* resp_msg, __u8 action) {
+static __always_inline enum xdp_action post_aggregation_process(struct xdp_md* ctx, sg_msg_t* resp_msg, RESP_VECTOR_TYPE* current_value, __u8 action) {
     // Set the flag in the payload for the upper layer programs
     resp_msg->hdr.flags = SG_MSG_F_PROCESSED;
     
@@ -77,6 +106,19 @@ static __always_inline enum xdp_action post_aggregation_process(struct xdp_md* c
 
     // If DISCARD_PK, all packets except the last one should be dropped
     if (__sync_val_compare_and_swap(&rs->post_agg_count, rs->num_workers, -1) == rs->num_workers) {
+        // This is the final packet. If the ringbuf is enabled and all-gather is disabled, we can
+        // deliver the aggregated value from here and avoid going to the TC layer (bypass skb alloc)
+        const __u32 zero = 0;
+        struct ctrl_sk_info* ctrl_sk = bpf_map_lookup_elem(&map_gather_ctrl_port, &zero);
+        CHECK_MAP_LOOKUP(ctrl_sk, XDP_DROP);
+
+        if (ctrl_sk->use_ring_buf && !ctrl_sk->all_gather) {
+            if (write_data_to_ringbuf(resp_msg->hdr.req_id, current_value) == -1)
+                return XDP_PASS; // If failed, retry in TC layer
+            clear_vector(current_value);
+            return XDP_DROP;
+        }
+        // Proceed to notify_prog with the final packet
         return XDP_PASS;
     }
     return XDP_DROP;
@@ -105,7 +147,7 @@ struct aggregation_prog_ctx {
 
 #define AGGREGATION_PROG_OUTRO(ctx, pk_action) { \
     bpf_spin_unlock(ctx.lock); \
-    return post_aggregation_process(ctx.xdp_ctx, ctx.pk_msg, pk_action); \
+    return post_aggregation_process(ctx.xdp_ctx, ctx.pk_msg, ctx.current_value, pk_action); \
 }
 
 

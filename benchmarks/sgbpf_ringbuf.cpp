@@ -146,6 +146,13 @@ void unloaded_latency_benchmark(int numRequests, sgbpf::Context& ctx) {
 
     int completedRequests = 0;
 
+    // service.setCtrlSkCallback([&](char* data, int reqID) -> void {
+    //     auto vec = (uint32_t*) data;
+    //     for (int i = 0; i < RESP_MAX_VECTOR_SIZE; i++) {
+    //         assert(vec[i] == i * workers.size());
+    //     }
+    // });
+
     std::vector<uint64_t> times;
     times.reserve(numRequests);
     for (auto i = 0; i < numRequests; ++i) {

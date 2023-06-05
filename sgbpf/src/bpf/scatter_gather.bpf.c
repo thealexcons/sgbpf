@@ -66,18 +66,6 @@ static __u64 send_worker(void* map, __u32* idx, worker_info_t* worker, struct se
     return 0;   // Continue to next worker destination (return 0)
 }
 
-static __always_inline void clear_vector(RESP_VECTOR_TYPE* agg_vector) {
-    // ebpf sets a maximum size for memset, so we need to "hack" around it
-    #define MAX_CONTIGUOUS_MEMSET_SIZE 256
-
-    #pragma clang loop unroll(full)
-    for (__u32 i = 0; i < RESP_MAX_VECTOR_SIZE; ++i) {
-        if (UNLIKELY( MOD_POW2(i, MAX_CONTIGUOUS_MEMSET_SIZE) == 0 )) {
-            asm volatile("" ::: "memory"); // dummy instruction needed to break the memset, need something cheap
-        }
-        agg_vector[i] = 0;
-    }
-}
 
 static inline int handle_clean_req_msg(char* payload, __u32 payload_size, void* data_end) {
 
@@ -459,22 +447,16 @@ int notify_gather_ctrl_prog(struct __sk_buff* skb) {
             return TC_ACT_OK;
         }
 
-        // Otherwise, notify ctrl sock by writing the aggregated value to the epoll ringbuf
-        // Only reached if CtrlSockMode::Epoll is set in sgbpf::Service instance
-        sg_msg_t* rb_data = bpf_ringbuf_reserve(&map_ctrl_sk_ringbuf, sizeof(sg_msg_t), 0);
-        if (!rb_data)
-            return TC_ACT_SHOT;
-        
-        // copy the request ID and the aggregated data into the ring buffer
-        rb_data->hdr.req_id = req_id_copy; // don't care about rest of header
-        #pragma clang loop unroll(full)
-        for (__u32 i = 0; i < RESP_MAX_VECTOR_SIZE; ++i) {
-            ((uint32_t*)rb_data->body)[i] = ((uint32_t*)agg_entry->data)[i];
-        }
+        // Otherwise, notify ctrl sock by writing the aggregated value to the ringbuf
+        // Only reached if ringbuf mode is chosen and all_gather mode is enabled 
+        // if ringbuf mode is enabled and all_gather mode is disabled, this is done in XDP
 
-        bpf_ringbuf_submit(rb_data, 0);
+        // This is reached only iff ctrl_sk->use_ring_buf && !ctrl_sk->all_gather
+        if (write_data_to_ringbuf(req_id_copy, (RESP_VECTOR_TYPE*) agg_entry->data) == -1)
+            return TC_ACT_SHOT;
+
         clear_vector(agg_entry->data);
-        return TC_ACT_SHOT; // drop the final packet, as it is read via ringbuf
+        return TC_ACT_SHOT;
     }
 
     return TC_ACT_OK;

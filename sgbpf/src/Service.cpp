@@ -104,8 +104,8 @@ Service::Service(Context& ctx,
         provideBuffers(true);
 
     // Prepare epoll-based method for ringbuf
-    if (d_ctrlSockMode == CtrlSockMode::Epoll)
-        d_ctrlSkRingBuf = ring_buffer__new(d_ctx.ctrlSkRingBufMap().fd(), handleRingBufEpollEvent, this, NULL);
+    if (d_ctrlSockMode == CtrlSockMode::Ringbuf)
+        d_ringBuf = ring_buffer__new(d_ctx.ctrlSkRingBufMap().fd(), handleRingBufEpollEvent, this, NULL);
 
     // Configure the worker sockets
     int numSocks = allowPackets ? d_workers.size() + 2 : 2;
@@ -147,7 +147,7 @@ Service::Service(Context& ctx,
 
     d_ctx.setGatherControlPort(
         ctrlPort, 
-        d_ctrlSockMode == CtrlSockMode::Epoll,  // use ringbuf to deliver data to application
+        d_ctrlSockMode == CtrlSockMode::Ringbuf,  // use ringbuf to deliver data to application
         enableAllGatherBroadcast                // if enabled, perform a broadcast of the final data
     );
 
@@ -177,8 +177,8 @@ Service::~Service()
 {
     delete[] d_activeRequests;
 
-    if (d_ctrlSockMode == CtrlSockMode::Epoll) {
-        ring_buffer__free(d_ctrlSkRingBuf);
+    if (d_ctrlSockMode == CtrlSockMode::Ringbuf) {
+        ring_buffer__free(d_ringBuf);
     }
 
     // Free all the allocated memory used for storing packets 
@@ -497,7 +497,7 @@ int handleRingBufEpollEvent(void* ctx, void* data, size_t data_sz)
     }
 
     #ifdef DEBUG_PRINT
-    std::cerr << "WARNING: callback function not set for CtrlSockMode::Epoll" << std::endl;
+    std::cerr << "WARNING: callback function not set for CtrlSockMode::Ringbuf" << std::endl;
     #endif
 	return 0;
 } 

@@ -32,7 +32,7 @@ private:
     Request*                            d_activeRequests;
     PacketAction                        d_packetAction;
     CtrlSockMode                        d_ctrlSockMode;
-    ring_buffer*                        d_ctrlSkRingBuf;
+    ring_buffer*                        d_ringBuf;
     std::function<void(char*, int)>     d_notificationRingBufCallback;
 
     static uint32_t s_nextRequestID;
@@ -61,15 +61,15 @@ public:
 
     void freeRequest(Request* req, bool immediate = false);
 
-    // The methods below are only relevant if CtrlSockMode::Epoll is set
-    inline void setCtrlSkCallback(const std::function<void(char*, int)>& cb) {
-        assert(d_ctrlSockMode == CtrlSockMode::Epoll);
+    // The methods below are only relevant if CtrlSockMode::Ringbuf is set
+    inline void setRingbufCallback(const std::function<void(char*, int)>& cb) {
+        assert(d_ctrlSockMode == CtrlSockMode::Ringbuf);
         d_notificationRingBufCallback = std::move(cb);
     }
 
-    inline int epollWaitCtrlSock(int timeout_ms) {
-        assert(d_ctrlSockMode == CtrlSockMode::Epoll);
-        return ring_buffer__poll(d_ctrlSkRingBuf, timeout_ms);
+    inline int epollRingbuf(int timeout_ms) {
+        assert(d_ctrlSockMode == CtrlSockMode::Ringbuf);
+        return ring_buffer__poll(d_ringBuf, timeout_ms);
     }
 
 private:

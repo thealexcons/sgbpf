@@ -82,7 +82,7 @@ void throughput_benchmark(int numRequests, sgbpf::Context& ctx) {
         ctx, 
         workers, 
         sgbpf::PacketAction::Discard,
-        sgbpf::CtrlSockMode::Epoll
+        sgbpf::CtrlSockMode::Ringbuf
     };
 
     auto totalGathers = 0;
@@ -105,7 +105,7 @@ void throughput_benchmark(int numRequests, sgbpf::Context& ctx) {
     while (totalGathers < numRequests) {
         // wait for gather to complete
         while (1) {
-            int completions = service.epollWaitCtrlSock(EPOLL_TIMEOUT_MS);
+            int completions = service.epollRingbuf(EPOLL_TIMEOUT_MS);
             if (completions > 0) {
                 gatherCount += completions;
                 totalGathers += completions;
@@ -141,12 +141,12 @@ void unloaded_latency_benchmark(int numRequests, sgbpf::Context& ctx) {
         ctx, 
         workers, 
         sgbpf::PacketAction::Discard,
-        sgbpf::CtrlSockMode::Epoll
+        sgbpf::CtrlSockMode::Ringbuf
     };
 
     int completedRequests = 0;
 
-    // service.setCtrlSkCallback([&](char* data, int reqID) -> void {
+    // service.setRingbufCallback([&](char* data, int reqID) -> void {
     //     auto vec = (uint32_t*) data;
     //     for (int i = 0; i < RESP_MAX_VECTOR_SIZE; i++) {
     //         assert(vec[i] == i * workers.size());
@@ -160,7 +160,7 @@ void unloaded_latency_benchmark(int numRequests, sgbpf::Context& ctx) {
         auto req = service.scatter("SCATTER", 8);
  
         while (1) {
-            int completions = service.epollWaitCtrlSock(EPOLL_TIMEOUT_MS);
+            int completions = service.epollRingbuf(EPOLL_TIMEOUT_MS);
             if (completions > 0) {
                 completedRequests += completions;
                 break;

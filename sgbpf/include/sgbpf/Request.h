@@ -49,7 +49,7 @@ enum class CtrlSockMode
     DefaultUnix,    // use as a raw Unix file descriptor
     Block,          // use io_uring + buffer, blocks until ctrl sk is ready
     BusyWait,       // use io_uring + buffer, user must busy wait on Request::isReady()
-    Epoll           // use epoll notification-based polling with callback
+    Ringbuf         // use epoll notification-based polling on a ringbuf with callback
 };
 
 

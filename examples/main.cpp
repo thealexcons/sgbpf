@@ -57,7 +57,7 @@ int main(int argc, char** argv) {
         sgbpf::CtrlSockMode::BusyWait
     };
 
-    service.setCtrlSkCallback([](char* data, int reqID) -> void {
+    service.setRingbufCallback([](char* data, int reqID) -> void {
         std::cout << "got agg data for req " << reqID << std::endl;
         for (auto j = 0u; j < RESP_MAX_VECTOR_SIZE; j++) {
             std::cout << "vec[" << j << "] = " << ((uint32_t*) data)[j] << std::endl;
@@ -73,7 +73,7 @@ int main(int argc, char** argv) {
     auto req = service.scatter("SCATTER", 8, params);
 
     while (1) {
-        int completions = service.epollWaitCtrlSock(50);
+        int completions = service.epollRingbuf(50);
         if (completions > 0)
             break;
     }

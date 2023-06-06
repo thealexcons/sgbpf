@@ -142,12 +142,18 @@ struct aggregation_prog_ctx {
     CHECK_MAP_LOOKUP(agg_entry, XDP_ABORTED); \
     ctx.current_value = agg_entry->data; \
     ctx.lock = &agg_entry->lock; \
+}
+
+#define AGGREGATION_PROG_ACQUIRE_LOCK(ctx) { \
     bpf_spin_lock(ctx.lock); \
 }
 
 #define AGGREGATION_PROG_OUTRO(ctx, pk_action) { \
-    bpf_spin_unlock(ctx.lock); \
     return post_aggregation_process(ctx.xdp_ctx, ctx.pk_msg, ctx.current_value, pk_action); \
+}
+
+#define AGGREGATION_PROG_RELEASE_LOCK(ctx) { \
+    bpf_spin_unlock(ctx.lock); \
 }
 
 

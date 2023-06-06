@@ -46,9 +46,6 @@ static void __always_inline clone_and_send_packet(struct __sk_buff* skb,
 
     // 2. Clone and redirect the packet to the worker
     bpf_clone_redirect(skb, skb->ifindex, 0);
-
-    // Cloning within the kernel means we avoid multiple user-kernel interactions
-    // and multiple traversals through the TCP/IP stack. See Electrode paper (consensus)
 }
 
 
@@ -106,12 +103,6 @@ SEC("tc")
 int scatter_prog(struct __sk_buff* skb) {
     // START_TIMER("scatter_prog"); // hot path takes around 10 to 20 us
 
-    // try scatter in userspace with io_uring, compare performance (throughput)
-    // with scattering in skb. does this savve memcpys?
-    // try for a very large number of reqs
-    // IMPORTANT POINT: Note that cloning within the kernel means we avoid multiple traversals 
-    // since TC is located AFTER the stack on egress.
-
     void* data = (void *)(long)skb->data;
 	void* data_end = (void *)(long)skb->data_end;
 	struct ethhdr* ethh;
@@ -146,10 +137,7 @@ int scatter_prog(struct __sk_buff* skb) {
     // The loader pid is typically 2nd (w/o sudo) after running: ps aux | grep "loader"
     // however this seems to be mismatched with manually timing it.
 
-    // Intercept any outgoing scatter messages from the application
     // TODO Maybe there's a better way to intercept traffic from a particular socket
-    // look into BPF_MAP_TYPE_SK_STORAGE
-    // see example code Marios sent in email (email subject: Modifying SKB header fields to clone packet)
     const __u32 zero = 0;
     uint16_t* local_application_port = bpf_map_lookup_elem(&map_application_port, &zero); // in network byte order
     CHECK_MAP_LOOKUP(local_application_port, TC_ACT_OK);
@@ -186,7 +174,7 @@ int scatter_prog(struct __sk_buff* skb) {
         bpf_printk("====================== GOT NEW REQ %d==============================", sgh->hdr.req_id);
         #endif
 
-        // Reset count (NOTE: this must go here, NOT in the ctrl sk notification)
+        // Reset count (NOTE: this must go here, NOT in the notification prog)
         struct req_state* rs = bpf_map_lookup_elem(&map_req_state, &slot);
         CHECK_MAP_LOOKUP(rs, TC_ACT_SHOT);
 
@@ -210,7 +198,6 @@ int scatter_prog(struct __sk_buff* skb) {
 #ifdef BPF_DEBUG_PRINT
         bpf_printk("Finished SCATTER request");
 #endif
-        //  todo: no need to clone the last one
         return TC_ACT_SHOT; // To avoid double-sending to the last worker
     }
     
@@ -226,8 +213,6 @@ int gather_prog(struct xdp_md* ctx) {
 	struct iphdr* iph;
     struct udphdr* udph;
 
-    // note to self: don't use UNLIKELY here because this is dealing
-    // with global network traffic
 	ethh = data;
 	if ((void *)(ethh + 1) > data_end)
 		return XDP_PASS;
@@ -247,8 +232,6 @@ int gather_prog(struct xdp_md* ctx) {
         return XDP_PASS;
 
 
-    // TODO Potentially move this to the socket/TC layer and use the SOCKET STORAGE Map?
-    // each socket has some storage associated, such as the worker IP and worker source
     worker_info_t worker;
     __builtin_memset(&worker, 0, sizeof(worker_info_t));    // needed
     worker.worker_ip = iph->saddr;
@@ -316,16 +299,9 @@ int gather_prog(struct xdp_md* ctx) {
     rs->count = (rs->num_workers == pk_count) ? -1 : pk_count;
     bpf_spin_unlock(&rs->count_lock);
 
-    // Mention in report that both approaches tried (regular func vs BPF) and 
-    // that microbenchmarks reveal performance is exactly the same, so opt for the easier to use option.
-    // Microbenchmarks show the reparsing the packet (ptr bounds check take around 20 ns), which is
-    // neglible in comparison with the aggregation logic. Hence from a library design POV, it is better
-    // to have a uniform API which is easy to use (mention that supporting both versions requires
-    // a more complex Makefile due to conditional compilation)
-
-    // Standard method: use BPF program defined in separate object file
-    bpf_tail_call(ctx, &map_aggregation_progs, CUSTOM_AGGREGATION_PROG_IDX); // aggregation prog takes around 1 us only
-    return XDP_PASS;
+    // Jump to user-supplied aggregation program
+    bpf_tail_call(ctx, &map_aggregation_progs, CUSTOM_AGGREGATION_PROG_IDX);
+    return XDP_ABORTED;
 
 /*  SCALAR AGGREGATION EXAMPLE:
 

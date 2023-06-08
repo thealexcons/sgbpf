@@ -129,7 +129,7 @@ public:
 
     inline const sg_msg_t* ctrlSockData() const { return &d_ctrlSkBuf; }
 
-    inline bool isExpired() const { return d_status == Status::TimedOut; }
+    inline bool hasExpired() const { return d_status == Status::TimedOut || hasTimedOut(); }
 
     // Methods below are only relevant if PacketAction::Discard is set
 

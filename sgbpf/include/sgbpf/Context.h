@@ -16,7 +16,10 @@
 
 namespace sgbpf {
 
-
+/**
+ * @brief Initialises the eBPF environment for scatter gather operations.
+ * 
+ */
 class Context
 {
 private:
@@ -52,6 +55,12 @@ private:
     constexpr static const auto ZERO = 0;
 
 public:
+    /**
+     * @brief Construct a new Context object
+     * 
+     * @param bpfObjectsPath The path to directory containing the BPF object files
+     * @param interfaceName The name of the network interface
+     */
     Context(const char* bpfObjectsPath, const char* interfaceName);
     ~Context();
 
@@ -64,10 +73,18 @@ public:
 };
 
 
+/**
+ * @brief An io_uring instance in an RAII wrapper class
+ */
 struct IOUringContext 
 {
     io_uring ring;
     
+    /**
+     * @brief Construct a new IOUringContext object
+     * 
+     * @param numEntries the number of entries for the SQ
+     */
     IOUringContext(uint32_t numEntries) 
     {
         // Initialise io_uring

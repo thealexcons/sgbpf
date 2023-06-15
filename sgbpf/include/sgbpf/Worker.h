@@ -12,6 +12,9 @@
 
 namespace sgbpf {
 
+/**
+ * @brief A single worker endpoint participating in scatter-gather operations
+ */
 class Worker 
 {
 private:
@@ -24,6 +27,12 @@ private:
 public:
 
     // CONSTRUCTORS
+    /**
+     * @brief Construct a new Worker object
+     * 
+     * @param ipAddress the IPv4 address as a string
+     * @param port the port number
+     */
     Worker(std::string ipAddress, uint16_t port);
 
     // SETTER
@@ -37,6 +46,12 @@ public:
     int socketFd() const { return d_skFd; }
 
     // STATIC METHODS
+    /**
+     * @brief Load workers from a text file (one worker per line in the format: address:port)
+     * 
+     * @param filePath the path to the file
+     * @return std::vector<Worker> a list of workers
+     */
     static std::vector<Worker> fromFile(const std::string& filePath);
 };
 

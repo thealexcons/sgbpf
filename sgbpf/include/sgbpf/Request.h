@@ -12,6 +12,9 @@
 namespace sgbpf
 {
 
+/**
+ * @brief The completion policy for a scatter-gather request
+ */
 enum class GatherCompletionPolicy 
 {
     WaitAll,
@@ -19,6 +22,9 @@ enum class GatherCompletionPolicy
     WaitN,
 };
 
+/**
+ * @brief The parameters for a scatter-gather request
+ */
 class ReqParams {
 private:
     constexpr const static auto DEFAULT_TIMEOUT_US = std::chrono::microseconds{50 * 1000};
@@ -38,12 +44,19 @@ class Service;
 
 // These are defined here to avoid issues with circular dependencies
 // and forward declaring enums
+
+/**
+ * @brief The packet action which determines the fate of the packet
+ */
 enum class PacketAction 
 {
     Discard,
     Allow,
 };
 
+/**
+ * @brief The data delivery API which determines how the aggregated data is consumed.
+ */
 enum class CtrlSockMode
 {
     DefaultUnix,    // use as a raw Unix file descriptor
@@ -53,16 +66,15 @@ enum class CtrlSockMode
 };
 
 
+/**
+ * @brief A handle to a scatter-gather request
+ */
 class Request
 {
-    // Manages the state and execution of a scatter gather request. Each invocation
-    // of the scatter gather primitive creates an instance of this class.
 public:
-    // constexpr static const auto MaxNumPksPerResponse = 8;
-    // constexpr static const auto MaxNumWorkers        = 4096;
-    constexpr static const auto NumBuffers           = 1024; //MaxNumPksPerResponse * MaxNumWorkers;
     constexpr static const auto MaxBufferSize        = sizeof(sg_msg_t);
 
+    // The status of a request
     enum class Status {
         Waiting,
         Ready,
@@ -105,6 +117,16 @@ public:
 
     Request() = default;
 
+    /**
+     * @brief Construct a new Request object
+     * 
+     * @param requestID the unique ID
+     * @param params the parameters to configure the request
+     * @param packetBufferPool a pointer to the global pool of buffers for packets
+     * @param workers the list of workers involved in the request
+     * @param packetAction the packet action
+     * @param ctrlSockMode the data delivery mode
+     */
     Request(int requestID, 
             const ReqParams& params,
             const std::vector<char*>* packetBufferPool,
@@ -112,14 +134,29 @@ public:
             PacketAction packetAction,
             CtrlSockMode ctrlSockMode);
 
-
+    /**
+     * @brief Returns the request ID
+     */
     inline int id() const { return d_requestID; }
 
+    /**
+     * @brief Checks whether the request is in-flight
+     */
     inline bool isActive() const { return d_isActive; }
 
+    /**
+     * @brief Returns the list of workers involved in this request
+     */
     inline const std::vector<Worker>& workers() const { return *d_workers; }
 
-    // Only makes sense if CtrlSockMode::{Block, BusyWait} are set or if PacketAction::Allow is set
+    /**
+     * @brief Checks if a request is ready (completed). 
+     * This method only makes sense if CtrlSockMode::{Block, BusyWait} are set 
+     * or if PacketAction::Allow is set
+     * 
+     * @param waitForCtrlSockOnly specify whether to only wait for the control socket rather than all
+     * the individual packets
+     */
     inline bool isReady(bool waitForCtrlSockOnly = false) const { 
         if (d_ctrlSockMode == CtrlSockMode::Block || d_ctrlSockMode == CtrlSockMode::BusyWait)
             return waitForCtrlSockOnly ? d_ctrlSockReady : d_ctrlSockReady && d_status == Status::Ready;
@@ -127,30 +164,55 @@ public:
         return d_status == Status::Ready;
     }
 
+    /**
+     * @brief Returns the final aggregated data available from the control socket
+     * 
+     * This method only makes sense if CtrlSockMode::{Block, BusyWait} are set 
+     */
     inline const sg_msg_t* ctrlSockData() const { return &d_ctrlSkBuf; }
 
+    /**
+     * @brief Checks whether the request has timed out
+     */
     inline bool hasExpired() const { return d_status == Status::TimedOut || hasTimedOut(); }
 
-    // Methods below are only relevant if PacketAction::Discard is set
 
+    /**
+     * @brief Returns the pointers to the response packet buffers
+     * This method is only relevant if PacketAction::Allow is set
+     * 
+     */
     inline const WorkerBufferPointerMap& bufferPointers() const { return d_workerBufferPtrs; };
 
+    /**
+     * @brief Returns a pointer to the packet data
+     * This method is only relevant if PacketAction::Allow is set
+     * 
+     * @param packetPtr the pointer to the packet
+     * @return const char* the packet data
+     */
     inline const char* data(const PacketBufferPointer& packetPtr) const {
         return ((*d_packetBufferPool)[packetPtr.bgid] + packetPtr.bid * Request::MaxBufferSize);
     }
 
 
 protected:
+    // check if the request has timed out by comparing the elapsed time with the start time
     bool hasTimedOut() const;
 
+    // add a new packet buffer pointer for a received packet
     void addBufferPtr(int workerFd, uint16_t bgid, uint16_t bid);
 
+    // start the timer for the request
     void startTimer();
 
+    // check whether enough individual packets have been received and the completion has satisfied
     bool receivedSufficientPackets() const;
 
+    // check completion for wait any strategy for PacketAction::Allow
     bool receivedWaitAny() const;
 
+    // check completion for wait n strategy for PacketAction::Allow
     bool receivedWaitN(uint32_t numWorkers) const;
 };
 
